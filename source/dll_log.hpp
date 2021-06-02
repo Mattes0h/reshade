@@ -9,12 +9,7 @@
 #include <sstream>
 #include <filesystem>
 #include <utf8/unchecked.h>
-#include <combaseapi.h> // REFIID, HRESULT
-
-#undef INFO
-#undef ERROR // This is defined in the Windows SDK headers
-#undef WARN
-#undef DEBUG
+#include <combaseapi.h> // Included for REFIID and HRESULT
 
 #define LOG(LEVEL) LOG_##LEVEL()
 #define LOG_INFO() reshade::log::message(reshade::log::level::info)
@@ -42,6 +37,10 @@ namespace reshade::log
 	/// The current log line stream.
 	/// </summary>
 	extern std::ostringstream line;
+	/// <summary>
+	/// An in-memory history of all log messages.
+	/// </summary>
+	extern std::vector<std::string> lines;
 
 	/// <summary>
 	/// Constructs a single log message including current time and level and writes it to the open log file.
@@ -73,24 +72,12 @@ namespace reshade::log
 			{
 			case E_NOTIMPL:
 				return *this << "E_NOTIMPL";
-			case E_OUTOFMEMORY:
-				return *this << "E_OUTOFMEMORY";
-			case E_INVALIDARG:
-				return *this << "E_INVALIDARG";
 			case E_NOINTERFACE:
 				return *this << "E_NOINTERFACE";
 			case E_FAIL:
 				return *this << "E_FAIL";
-			case 0x8876017C:
-				return *this << "D3DERR_OUTOFVIDEOMEMORY";
-			case 0x88760868:
-				return *this << "D3DERR_DEVICELOST";
-			case 0x8876086A:
-				return *this << "D3DERR_NOTAVAILABLE";
-			case 0x8876086C:
-				return *this << "D3DERR_INVALIDCALL";
-			case 0x88760870:
-				return *this << "D3DERR_DEVICEREMOVED";
+			case E_INVALIDARG:
+				return *this << "E_INVALIDARG";
 			case DXGI_ERROR_INVALID_CALL:
 				return *this << "DXGI_ERROR_INVALID_CALL";
 			case DXGI_ERROR_UNSUPPORTED:

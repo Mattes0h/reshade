@@ -4,7 +4,6 @@
  */
 
 #include "runtime_config.hpp"
-#include <cassert>
 #include <fstream>
 #include <sstream>
 
@@ -22,20 +21,42 @@ reshade::ini_file::~ini_file()
 
 void reshade::ini_file::load()
 {
+	enum class condition { none, open, not_found, blocked, unknown };
+	condition condition = condition::none;
+
 	std::error_code ec;
+
 	const std::filesystem::file_time_type modified_at = std::filesystem::last_write_time(_path, ec);
-	if (ec || _modified_at >= modified_at)
-		return; // Skip loading if there was an error (e.g. file does not exist) or there was no modification to the file since it was last loaded
+	if (ec.value() == 0)
+		condition = condition::open;
+	else if (ec.value() == 0x2 || ec.value() == 0x3) // 0x2: ERROR_FILE_NOT_FOUND, 0x3: ERROR_PATH_NOT_FOUND
+		condition = condition::not_found;
+	else
+		condition = condition::unknown;
+
+	if (condition == condition::open && _modified_at >= modified_at)
+		return;
 
 	std::ifstream file;
-	if (file.open(_path); !file)
+
+	if (condition == condition::open)
+		if (file.open(_path); file.fail())
+			condition = condition::blocked;
+
+	if (condition == condition::blocked || condition == condition::unknown)
 		return;
 
 	_sections.clear();
 	_modified = false;
-	_modified_at = modified_at;
 
+	if (condition == condition::not_found)
+		return;
+
+	assert(std::filesystem::file_size(_path, ec) > 0);
+
+	_modified_at = modified_at;
 	file.imbue(std::locale("en-us.UTF-8"));
+
 	// Remove BOM (0xefbbbf means 0xfeff)
 	if (file.get() != 0xef || file.get() != 0xbb || file.get() != 0xbf)
 		file.seekg(0, std::ios::beg);
@@ -57,42 +78,28 @@ void reshade::ini_file::load()
 
 		// Read section content
 		const auto assign_index = line.find('=');
+
 		if (assign_index != std::string::npos)
 		{
-			const std::string key = trim(line.substr(0, assign_index));
-			const std::string value = trim(line.substr(assign_index + 1));
+			const auto key = trim(line.substr(0, assign_index));
+			const auto value = trim(line.substr(assign_index + 1));
+			std::vector<std::string> value_splitted;
 
-			// Append to key if it already exists
-			reshade::ini_file::value &elements = _sections[section][key];
-			for (size_t offset = 0, base = 0, len = value.size(); offset <= len;)
+			for (size_t i = 0, len = value.size(), found; i < len; i = found + 1)
 			{
-				// Treat ",," as an escaped comma and only split on single ","
-				const size_t found = std::min(value.find_first_of(',', offset), len);
-				if (found + 1 < len && value[found + 1] == ',')
-				{
-					offset = found + 2;
-				}
-				else
-				{
-					std::string &element = elements.emplace_back();
-					element.reserve(found - base);
+				found = value.find_first_of(',', i);
 
-					while (base < found)
-					{
-						const char c = value[base++];
-						element += c;
+				if (found == std::string::npos)
+					found = len;
 
-						if (c == ',' && base < found && value[base] == ',')
-							base++; // Skip second comma in a ",," escape sequence
-					}
-
-					base = offset = found + 1;
-				}
+				value_splitted.push_back(value.substr(i, found - i));
 			}
+
+			_sections[section][key] = value_splitted;
 		}
 		else
 		{
-			_sections[section].insert({ line, {} });
+			_sections[section][line] = {};
 		}
 	}
 }
@@ -101,13 +108,14 @@ bool reshade::ini_file::save()
 	if (!_modified)
 		return true;
 
-	// Reset state even on failure to avoid 'flush_cache' repeatedly trying and failing to save
-	_modified = false;
-
 	std::error_code ec;
-	const std::filesystem::file_time_type modified_at = std::filesystem::last_write_time(_path, ec);
-	if (!ec && modified_at >= _modified_at)
-		return true; // File exists and was modified on disk and therefore may have different data, so cannot save
+	std::filesystem::file_time_type modified_at = std::filesystem::last_write_time(_path, ec);
+	if (ec.value() == 0 && modified_at >= _modified_at)
+	{
+		// File exists and was modified on disk and may have different data, so cannot save
+		_modified = false;
+		return true;
+	}
 
 	std::stringstream data;
 	std::vector<std::string> section_names, key_names;
@@ -117,11 +125,10 @@ bool reshade::ini_file::save()
 		section_names.push_back(section.first);
 
 	// Sort sections to generate consistent files
-	std::sort(section_names.begin(), section_names.end(),
-		[](std::string a, std::string b) {
-			std::transform(a.begin(), a.end(), a.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
-			std::transform(b.begin(), b.end(), b.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
-			return a < b;
+	std::sort(section_names.begin(), section_names.end(), [](std::string a, std::string b) {
+		std::transform(a.begin(), a.end(), a.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
+		std::transform(b.begin(), b.end(), b.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
+		return a < b;
 		});
 
 	for (const std::string &section_name : section_names)
@@ -133,11 +140,10 @@ bool reshade::ini_file::save()
 		for (const auto &key : keys)
 			key_names.push_back(key.first);
 
-		std::sort(key_names.begin(), key_names.end(),
-			[](std::string a, std::string b) {
-				std::transform(a.begin(), a.end(), a.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
-				std::transform(b.begin(), b.end(), b.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
-				return a < b;
+		std::sort(key_names.begin(), key_names.end(), [](std::string a, std::string b) {
+			std::transform(a.begin(), a.end(), a.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
+			std::transform(b.begin(), b.end(), b.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
+			return a < b;
 			});
 
 		// Empty section should have been sorted to the top, so do not need to append it before keys
@@ -148,21 +154,14 @@ bool reshade::ini_file::save()
 		{
 			data << key_name << '=';
 
-			if (const reshade::ini_file::value &elements = keys.at(key_name); !elements.empty())
+			size_t i = 0;
+
+			for (const std::string &item : keys.at(key_name))
 			{
-				std::string value;
-				for (const std::string &element : elements)
-				{
-					value.reserve(value.size() + element.size() + 1);
-					for (const char c : element)
-						value.append(c == ',' ? 2 : 1, c);
-					value += ','; // Separate multiple values with a comma
-				}
+				if (i++ != 0) // Separate multiple values with a comma
+					data << ',';
 
-				// Remove the last comma
-				value.pop_back();
-
-				data << value;
+				data << item;
 			}
 
 			data << '\n';
@@ -172,16 +171,24 @@ bool reshade::ini_file::save()
 	}
 
 	std::ofstream file(_path);
-	if (!file)
+	if (!file.is_open() || file.fail())
+	{
+		// Reset state to avoid cache flushing to repeatedly save the file
+		_modified = false;
 		return false;
+	}
+
+	file.rdbuf()->pubsetbuf(nullptr, 0);
 
 	const std::string str = data.str();
 	file.imbue(std::locale("en-us.UTF-8"));
 	file.write(str.data(), str.size());
 
-	// Flush stream to disk before updating last write time
-	file.close();
-	_modified_at = std::filesystem::last_write_time(_path, ec);
+	// Keep the modified flag if saving was not successful, so to try again later
+	if (_modified = file.fail(); _modified)
+		std::filesystem::last_write_time(_path, modified_at, ec);
+	else if (modified_at = std::filesystem::last_write_time(_path, ec); ec.value() == 0)
+		_modified_at = modified_at;
 
 	assert(std::filesystem::file_size(_path, ec) > 0);
 
@@ -203,7 +210,7 @@ bool reshade::ini_file::flush_cache()
 	const auto now = std::filesystem::file_time_type::clock::now();
 
 	// Save all files that were modified in one second intervals
-	for (std::pair<const std::wstring, ini_file> &file : g_ini_cache)
+	for (auto &file : g_ini_cache)
 	{
 		if (file.second._modified && (now - file.second._modified_at) > std::chrono::seconds(1))
 			success &= file.second.save();
@@ -215,12 +222,4 @@ bool reshade::ini_file::flush_cache(const std::filesystem::path &path)
 {
 	const auto it = g_ini_cache.find(path);
 	return it != g_ini_cache.end() && it->second.save();
-}
-
-reshade::ini_file &reshade::global_config()
-{
-	std::filesystem::path config_path = g_reshade_dll_path;
-	config_path.replace_extension(L".ini");
-	static reshade::ini_file config(config_path); // Load once on first use
-	return config;
 }

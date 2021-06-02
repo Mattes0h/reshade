@@ -9,7 +9,7 @@
 #include <cstdio> // snprintf
 #include <cassert>
 #include <cstring> // stricmp
-#include <algorithm> // std::find_if, std::max
+#include <algorithm> // std::max
 
 using namespace reshadefx;
 
@@ -73,12 +73,8 @@ private:
 	{
 		if constexpr (is_decl)
 		{
-			if (type.has(type::q_static))
-				s += "static ";
 			if (type.has(type::q_precise))
 				s += "precise ";
-			if (type.has(type::q_groupshared))
-				s += "groupshared ";
 		}
 
 		if constexpr (is_param)
@@ -108,23 +104,12 @@ private:
 		case type::t_bool:
 			s += "bool";
 			break;
-		case type::t_min16int:
-			// Minimum precision types are only supported in shader model 4 and up
-			// Real 16-bit types were added in shader model 6.2
-			s += _shader_model >= 62 ? "int16_t" : _shader_model >= 40 ? "min16int" : "int";
-			break;
 		case type::t_int:
 			s += "int";
-			break;
-		case type::t_min16uint:
-			s += _shader_model >= 62 ? "uint16_t" : _shader_model >= 40 ? "min16uint" : "int";
 			break;
 		case type::t_uint:
 			// In shader model 3, uints can only be used with known-positive values, so use ints instead
 			s += _shader_model >= 40 ? "uint" : "int";
-			break;
-		case type::t_min16float:
-			s += _shader_model >= 62 ? "float16_t" : _shader_model >= 40 ? "min16float" : "float";
 			break;
 		case type::t_float:
 			s += "float";
@@ -134,9 +119,6 @@ private:
 			break;
 		case type::t_sampler:
 			s += "__sampler2D";
-			break;
-		case type::t_storage:
-			s += "RWTexture2D<float4>";
 			break;
 		default:
 			assert(false);
@@ -170,7 +152,6 @@ private:
 
 		if (type.is_struct())
 		{
-			// The can only be zero initializer struct constants
 			assert(data.as_uint[0] == 0);
 
 			s += '(' + id_to_name(type.definition) + ")0";
@@ -190,15 +171,12 @@ private:
 			case type::t_bool:
 				s += data.as_uint[i] ? "true" : "false";
 				break;
-			case type::t_min16int:
 			case type::t_int:
 				s += std::to_string(data.as_int[i]);
 				break;
-			case type::t_min16uint:
 			case type::t_uint:
 				s += std::to_string(data.as_uint[i]);
 				break;
-			case type::t_min16float:
 			case type::t_float:
 				if (std::isnan(data.as_float[i])) {
 					s += "-1.#IND";
@@ -208,12 +186,10 @@ private:
 					s += std::signbit(data.as_float[i]) ? "1.#INF" : "-1.#INF";
 					break;
 				}
-				char temp[64]; // Will be null-terminated by snprintf
-				std::snprintf(temp, sizeof(temp), "%1.8e", data.as_float[i]);
+				char temp[64] = "";
+				std::snprintf(temp, sizeof(temp), "%.8f", data.as_float[i]);
 				s += temp;
 				break;
-			default:
-				assert(false);
 			}
 
 			if (i < components - 1)
@@ -273,21 +249,21 @@ private:
 		{
 			if (semantic == "SV_POSITION")
 				return "POSITION"; // For pixel shaders this has to be "VPOS", so need to redefine that in post
-			if (semantic == "SV_POINTSIZE")
-				return "PSIZE";
 			if (semantic.compare(0, 9, "SV_TARGET") == 0)
 				return "COLOR" + semantic.substr(9);
 			if (semantic == "SV_DEPTH")
 				return "DEPTH";
 			if (semantic == "SV_VERTEXID")
 				return "TEXCOORD0 /* VERTEXID */";
-			if (semantic == "SV_ISFRONTFACE")
-				return "VFACE";
 		}
 		else
 		{
+			if (semantic == "POSITION" || semantic == "VPOS")
+				return "SV_POSITION";
 			if (semantic.compare(0, 5, "COLOR") == 0)
 				return "SV_TARGET" + semantic.substr(5);
+			if (semantic == "DEPTH")
+				return "SV_DEPTH";
 		}
 
 		return semantic;
@@ -306,8 +282,7 @@ private:
 		// HLSL compiler complains about "technique" and "pass" names in strict mode (no matter the casing)
 		if (stringicmp(name, "pass") ||
 			stringicmp(name, "technique"))
-			// This is guaranteed to not clash with user defined names, since those starting with an underscore are filtered out in 'define_name'
-			name = '_' + name;
+			name += "_RESERVED";
 
 		return name;
 	}
@@ -355,24 +330,21 @@ private:
 	id   define_texture(const location &loc, texture_info &info) override
 	{
 		info.id = make_id();
-		info.binding = ~0u;
+		info.binding = _module.num_texture_bindings;
 
-		define_name<naming::unique>(info.id, info.unique_name);
+		_module.textures.push_back(info);
+
+		std::string &code = _blocks.at(_current_block);
 
 		if (_shader_model >= 40)
 		{
-			info.binding = _module.num_texture_bindings;
-			_module.num_texture_bindings += 2;
-
-			std::string &code = _blocks.at(_current_block);
-
 			write_location(code, loc);
 
-			code += "Texture2D __"     + info.unique_name + " : register(t" + std::to_string(info.binding + 0) + ");\n";
+			code += "Texture2D "       + info.unique_name + " : register(t" + std::to_string(info.binding + 0) + ");\n";
 			code += "Texture2D __srgb" + info.unique_name + " : register(t" + std::to_string(info.binding + 1) + ");\n";
-		}
 
-		_module.textures.push_back(info);
+			_module.num_texture_bindings += 2;
+		}
 
 		return info.id;
 	}
@@ -410,12 +382,11 @@ private:
 
 			write_location(code, loc);
 
-			code += "static const __sampler2D " + id_to_name(info.id) + " = { " + (info.srgb ? "__srgb" : "__") + info.texture_name + ", __s" + std::to_string(info.binding) + " };\n";
+			code += "static const __sampler2D " + id_to_name(info.id) + " = { " + (info.srgb ? "__srgb" : "") + info.texture_name + ", __s" + std::to_string(info.binding) + " };\n";
 		}
 		else
 		{
 			info.binding = _module.num_sampler_bindings++;
-			info.texture_binding = ~0u; // Unset texture binding
 
 			code += "sampler2D __" + info.unique_name + "_s : register(s" + std::to_string(info.binding) + ");\n";
 
@@ -435,40 +406,19 @@ private:
 
 		return info.id;
 	}
-	id   define_storage(const location &loc, storage_info &info) override
-	{
-		info.id = make_id();
-		info.binding = ~0u;
-
-		define_name<naming::unique>(info.id, info.unique_name);
-
-		if (_shader_model >= 50)
-		{
-			info.binding = _module.num_storage_bindings++;
-
-			std::string &code = _blocks.at(_current_block);
-
-			write_location(code, loc);
-
-			code += "RWTexture2D<float4> " + info.unique_name + " : register(u" + std::to_string(info.binding) + ");\n";
-		}
-
-		_module.storages.push_back(info);
-
-		return info.id;
-	}
 	id   define_uniform(const location &loc, uniform_info &info) override
 	{
+		info.size = info.type.is_matrix() ? (info.type.rows - 1) * 16u + info.type.cols * 4 : info.type.rows * 4;
+		// Arrays are not packed in HLSL by default, each element is stored in a four-component vector
+		if (info.type.is_array())
+			info.size = std::max(16u, info.size) * info.type.array_length;
+
 		const id res = make_id();
 
 		define_name<naming::unique>(res, info.name);
 
 		if (_uniforms_to_spec_constants && info.has_initializer_value)
 		{
-			info.size = info.type.components() * 4;
-			if (info.type.is_array())
-				info.size *= info.type.array_length;
-
 			std::string &code = _blocks.at(_current_block);
 
 			write_location(code, loc);
@@ -484,18 +434,10 @@ private:
 		}
 		else
 		{
-			if (info.type.is_matrix())
-				info.size = align_up(info.type.cols * 4, 16, info.type.rows);
-			else // Vectors are column major (1xN), matrices are row major (NxM)
-				info.size = info.type.rows * 4;
-			// Arrays are not packed in HLSL by default, each element is stored in a four-component vector (16 bytes)
-			if (info.type.is_array())
-				info.size = align_up(info.size, 16, info.type.array_length);
-
-			// Data is packed into 4-byte boundaries (see https://docs.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-packing-rules)
+			// Data is packed into 4-byte boundaries (see https://docs.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-packing-rules)
 			// This is already guaranteed, since all types are at least 4-byte in size
 			info.offset = _module.total_uniform_size;
-			// Additionally, HLSL packs data so that it does not cross a 16-byte boundary
+			// Additionally HLSL packs data so that it does not cross a 16-byte boundary
 			const uint32_t remaining = 16 - (info.offset & 15);
 			if (remaining != 16 && info.size > remaining)
 				info.offset += remaining;
@@ -568,9 +510,16 @@ private:
 	}
 	id   define_function(const location &loc, function_info &info) override
 	{
-		info.definition = make_id();
+		return define_function(loc, info, _shader_model >= 40);
+	}
+	id   define_function(const location &loc, function_info &info, bool is_entry_point)
+	{
+		std::string name = info.unique_name;
+		if (!is_entry_point)
+			name += '_';
 
-		define_name<naming::unique>(info.definition, info.unique_name);
+		info.definition = make_id();
+		define_name<naming::unique>(info.definition, std::move(name));
 
 		std::string &code = _blocks.at(_current_block);
 
@@ -595,7 +544,7 @@ private:
 			if (param.type.is_array())
 				code += '[' + std::to_string(param.type.array_length) + ']';
 
-			if (!param.semantic.empty())
+			if (is_entry_point && !param.semantic.empty())
 				code += " : " + convert_semantic(param.semantic);
 
 			if (i < num_params - 1)
@@ -604,7 +553,7 @@ private:
 
 		code += ')';
 
-		if (!info.return_semantic.empty())
+		if (is_entry_point && !info.return_semantic.empty())
 			code += " : " + convert_semantic(info.return_semantic);
 
 		code += '\n';
@@ -614,111 +563,63 @@ private:
 		return info.definition;
 	}
 
-	void define_entry_point(function_info &func, shader_type stype, int num_threads[3]) override
+	void define_entry_point(const function_info &func, bool is_ps) override
 	{
-		// Modify entry point name since a new function is created for it below
-		if (stype == shader_type::cs)
-			func.unique_name = 'E' + func.unique_name +
-				'_' + std::to_string(num_threads[0]) +
-				'_' + std::to_string(num_threads[1]) +
-				'_' + std::to_string(num_threads[2]);
-		else if (_shader_model < 40)
-			func.unique_name = 'E' + func.unique_name;
-
 		if (const auto it = std::find_if(_module.entry_points.begin(), _module.entry_points.end(),
 			[&func](const auto &ep) { return ep.name == func.unique_name; }); it != _module.entry_points.end())
 			return;
 
-		_module.entry_points.push_back({ func.unique_name, stype });
+		_module.entry_points.push_back({ func.unique_name, is_ps });
 
-		// Only have to rewrite the entry point function signature in shader model 3 and for compute (to write "numthreads" attribute)
-		if (_shader_model >= 40 && stype != shader_type::cs)
+		// Only have to rewrite the entry point function signature in shader model 3
+		if (_shader_model >= 40)
 			return;
 
 		auto entry_point = func;
 
-		const auto is_color_semantic = [](const std::string &semantic) {
-			return semantic.compare(0, 9, "SV_TARGET") == 0 || semantic.compare(0, 5, "COLOR") == 0; };
-		const auto is_position_semantic = [](const std::string &semantic) {
-			return semantic == "SV_POSITION" || semantic == "POSITION"; };
+		const auto is_color_semantic = [](const std::string &semantic) { return semantic.compare(0, 9, "SV_TARGET") == 0 || semantic.compare(0, 5, "COLOR") == 0; };
+		const auto is_position_semantic = [](const std::string &semantic) { return semantic == "SV_POSITION" || semantic == "POSITION"; };
 
 		const auto ret = make_id();
 		define_name<naming::general>(ret, "ret");
 
 		std::string position_variable_name;
-		{
-			if (func.return_type.is_struct() && stype == shader_type::vs)
-			{
-				// If this function returns a struct which contains a position output, keep track of its member name
-				for (const struct_member_info &member : find_struct(func.return_type.definition).member_list)
-					if (is_position_semantic(member.semantic))
-						position_variable_name = id_to_name(ret) + '.' + member.name;
-			}
 
-			if (is_color_semantic(func.return_semantic))
-			{
-				// The COLOR output semantic has to be a four-component vector in shader model 3, so enforce that
-				entry_point.return_type.rows = 4;
-			}
-			if (is_position_semantic(func.return_semantic))
-			{
-				if (stype == shader_type::vs)
-					// Keep track of the position output variable
-					position_variable_name = id_to_name(ret);
-			}
-		}
-		for (struct_member_info &param : entry_point.parameter_list)
-		{
-			if (param.type.is_struct() && stype == shader_type::vs)
-			{
-				for (const struct_member_info &member : find_struct(param.type.definition).member_list)
-					if (is_position_semantic(member.semantic))
-						position_variable_name = param.name + '.' + member.name;
-			}
+		if (func.return_type.is_struct() && !is_ps)
+			// If this function returns a struct which contains a position output, keep track of its member name
+			for (const auto &member : find_struct(func.return_type.definition).member_list)
+				if (is_position_semantic(member.semantic))
+					position_variable_name = id_to_name(ret) + '.' + member.name;
+		if (is_color_semantic(func.return_semantic))
+			// The COLOR output semantic has to be a four-component vector in shader model 3, so enforce that
+			entry_point.return_type.rows = 4;
+		else if (is_position_semantic(func.return_semantic) && !is_ps)
+			position_variable_name = id_to_name(ret);
 
+		for (auto &param : entry_point.parameter_list)
 			if (is_color_semantic(param.semantic))
-			{
 				param.type.rows = 4;
-			}
-			if (is_position_semantic(param.semantic))
-			{
-				if (stype == shader_type::vs)
-					// Keep track of the position output variable
-					position_variable_name = param.name;
-				else if (stype == shader_type::ps)
-					// Change the position input semantic in pixel shaders
+			else if (is_position_semantic(param.semantic))
+				if (is_ps) // Change the position input semantic in pixel shaders
 					param.semantic = "VPOS";
-			}
-		}
+				else // Keep track of the position output variable
+					position_variable_name = param.name;
 
-		if (stype == shader_type::cs)
-			_blocks.at(_current_block) += "[numthreads(" +
-				std::to_string(num_threads[0]) + ", " +
-				std::to_string(num_threads[1]) + ", " +
-				std::to_string(num_threads[2]) + ")]\n";
-
-		define_function({}, entry_point);
+		define_function({}, entry_point, true);
 		enter_block(create_block());
 
 		std::string &code = _blocks.at(_current_block);
 
 		// Clear all color output parameters so no component is left uninitialized
-		for (struct_member_info &param : entry_point.parameter_list)
-		{
+		for (auto &param : entry_point.parameter_list)
 			if (is_color_semantic(param.semantic))
 				code += '\t' + param.name + " = float4(0.0, 0.0, 0.0, 0.0);\n";
-		}
 
 		code += '\t';
 		if (is_color_semantic(func.return_semantic))
-		{
 			code += "const float4 " + id_to_name(ret) + " = float4(";
-		}
 		else if (!func.return_type.is_void())
-		{
-			write_type(code, func.return_type);
-			code += ' ' + id_to_name(ret) + " = ";
-		}
+			write_type(code, func.return_type), code += ' ' + id_to_name(ret) + " = ";
 
 		// Call the function this entry point refers to
 		code += id_to_name(func.definition) + '(';
@@ -751,7 +652,7 @@ private:
 		code += ";\n";
 
 		// Shift everything by half a viewport pixel to workaround the different half-pixel offset in D3D9 (https://aras-p.info/blog/2016/04/08/solving-dx9-half-pixel-offset/)
-		if (!position_variable_name.empty() && stype == shader_type::vs) // Check if we are in a vertex shader definition
+		if (!position_variable_name.empty() && !is_ps) // Check if we are in a vertex shader definition
 			code += '\t' + position_variable_name + ".xy += __TEXEL_SIZE__ * " + position_variable_name + ".ww;\n";
 
 		leave_block_and_return(func.return_type.is_void() ? 0 : ret);
@@ -1052,7 +953,7 @@ private:
 	id   emit_call(const location &loc, id function, const type &res_type, const std::vector<expression> &args) override
 	{
 #ifndef NDEBUG
-		for (const expression &arg : args)
+		for (const auto &arg : args)
 			assert(arg.chain.empty() && arg.base != 0);
 #endif
 
@@ -1092,7 +993,7 @@ private:
 	id   emit_call_intrinsic(const location &loc, id intrinsic, const type &res_type, const std::vector<expression> &args) override
 	{
 #ifndef NDEBUG
-		for (const expression &arg : args)
+		for (const auto &arg : args)
 			assert(arg.chain.empty() && arg.base != 0);
 #endif
 
@@ -1110,14 +1011,9 @@ private:
 #include "effect_symbol_table_intrinsics.inl"
 		};
 
-		if (_shader_model >= 40 && (
-			intrinsic == tex2Dsize0 || intrinsic == tex2Dsize1 || intrinsic == tex2Dsize2 ||
-			intrinsic == atomicAdd0 || intrinsic == atomicAnd0 || intrinsic == atomicOr0  || intrinsic == atomicXor0 ||
-			intrinsic == atomicMin0 || intrinsic == atomicMin1 || intrinsic == atomicMax0 || intrinsic == atomicMax1 ||
-			intrinsic == atomicExchange0 || intrinsic == atomicCompareExchange0))
+		if (_shader_model >= 40 && (intrinsic == tex2Dsize0 || intrinsic == tex2Dsize1))
 		{
 			// Implementation of the 'tex2Dsize' intrinsic passes the result variable into 'GetDimensions' as output argument
-			// Same with the atomic intrinsics, which use the last parameter to return the previous value of the target
 			write_type(code, res_type);
 			code += ' ' + id_to_name(res) + "; ";
 		}
@@ -1267,24 +1163,30 @@ private:
 		std::string &loop_data = _blocks.at(loop_block);
 		std::string &continue_data = _blocks.at(continue_block);
 
+		// Condition value can be missing in infinite loop constructs like "for (;;)"
+		const std::string condition_name = condition_value != 0 ? id_to_name(condition_value) : "true";
+
 		increase_indentation_level(loop_data);
 		increase_indentation_level(loop_data);
 		increase_indentation_level(continue_data);
 
 		code += _blocks.at(prev_block);
 
-		std::string attributes;
-		if (flags & 0x1)
-			attributes += "[unroll] ";
-		if (flags & 0x2)
-			attributes += "[loop] ";
+		if (condition_block == 0)
+			code += "\tbool " + condition_name + ";\n";
+		else
+			code += _blocks.at(condition_block);
 
-		// Condition value can be missing in infinite loop constructs like "for (;;)"
-		std::string condition_name = condition_value != 0 ? id_to_name(condition_value) : "true";
+		write_location(code, loc);
+
+		code += '\t';
+
+		if (flags & 0x1) code += "[unroll] ";
+		if (flags & 0x2) code +=   "[loop] ";
 
 		if (condition_block == 0)
 		{
-			// Convert the last SSA variable initializer to an assignment statement
+			// Convert variable initializer to assignment statement
 			auto pos_assign = continue_data.rfind(condition_name);
 			auto pos_prev_assign = continue_data.rfind('\t', pos_assign);
 			continue_data.erase(pos_prev_assign + 1, pos_assign - pos_prev_assign - 1);
@@ -1294,11 +1196,6 @@ private:
 			for (size_t offset = 0; (offset = loop_data.find(continue_id, offset)) != std::string::npos; offset += continue_data.size())
 				loop_data.replace(offset, continue_id.size(), continue_data);
 
-			code += "\tbool " + condition_name + ";\n";
-
-			write_location(code, loc);
-
-			code += '\t' + attributes;
 			code += "do\n\t{\n\t\t{\n";
 			code += loop_data; // Encapsulate loop body into another scope, so not to confuse any local variables with the current iteration variable accessed in the continue block below
 			code += "\t\t}\n";
@@ -1309,49 +1206,18 @@ private:
 		{
 			std::string &condition_data = _blocks.at(condition_block);
 
-			// Work around D3DCompiler putting uniform variables that are used as the loop count register into integer registers (only in SM3)
-			// Only applies to dynamic loops with uniform variables in the condition, where it generates a loop instruction like "rep i0", but then expects the "i0" register to be set externally
-			// Moving the loop condition into the loop body forces it to move the uniform variable into a constant register instead and geneates a fixed number of loop iterations with "defi i0, 255, ..."
-			// Check 'condition_name' instead of 'condition_value' here to also catch cases where a constant boolean expression was passed in as loop condition
-			bool use_break_statement_for_condition = (_shader_model < 40 && condition_name != "true") &&
-				std::find_if(_module.uniforms.begin(), _module.uniforms.end(),
-					[&](const uniform_info &info) { return condition_data.find(info.name) != std::string::npos || condition_name.find(info.name) != std::string::npos; }) != _module.uniforms.end();
+			increase_indentation_level(condition_data);
 
-			// If the condition data is just a single line, then it is a simple expression, which we can just put into the loop condition as-is
-			if (!use_break_statement_for_condition && std::count(condition_data.begin(), condition_data.end(), '\n') == 1)
-			{
-				// Convert SSA variable initializer back to a condition expression
-				auto pos_assign = condition_data.find('=');
-				condition_data.erase(0, pos_assign + 2);
-				auto pos_semicolon = condition_data.rfind(';');
-				condition_data.erase(pos_semicolon);
-
-				condition_name = std::move(condition_data);
-				assert(condition_data.empty());
-			}
-			else
-			{
-				code += condition_data;
-
-				increase_indentation_level(condition_data);
-
-				// Convert the last SSA variable initializer to an assignment statement
-				auto pos_assign = condition_data.rfind(condition_name);
-				auto pos_prev_assign = condition_data.rfind('\t', pos_assign);
-				condition_data.erase(pos_prev_assign + 1, pos_assign - pos_prev_assign - 1);
-			}
+			// Convert variable initializer to assignment statement
+			auto pos_assign = condition_data.rfind(condition_name);
+			auto pos_prev_assign = condition_data.rfind('\t', pos_assign);
+			condition_data.erase(pos_prev_assign + 1, pos_assign - pos_prev_assign - 1);
 
 			const std::string continue_id = "__CONTINUE__" + std::to_string(continue_block);
 			for (size_t offset = 0; (offset = loop_data.find(continue_id, offset)) != std::string::npos; offset += continue_data.size())
 				loop_data.replace(offset, continue_id.size(), continue_data + condition_data);
 
-			write_location(code, loc);
-
-			code += '\t' + attributes;
-			if (use_break_statement_for_condition)
-				code += "while (true)\n\t{\n\t\tif (!" + condition_name + ") break;\n\t\t{\n";
-			else
-				code += "while (" + condition_name + ")\n\t{\n\t\t{\n";
+			code += "while (" + condition_name + ")\n\t{\n\t\t{\n";
 			code += loop_data;
 			code += "\t\t}\n";
 			code += continue_data;
@@ -1367,10 +1233,9 @@ private:
 		_blocks.erase(loop_block);
 		_blocks.erase(continue_block);
 	}
-	void emit_switch(const location &loc, id selector_value, id selector_block, id default_label, id default_block, const std::vector<id> &case_literal_and_labels, const std::vector<id> &case_blocks, unsigned int flags) override
+	void emit_switch(const location &loc, id selector_value, id selector_block, id default_label, const std::vector<id> &case_literal_and_labels, unsigned int flags) override
 	{
-		assert(selector_value != 0 && selector_block != 0 && default_label != 0 && default_block != 0);
-		assert(case_blocks.size() == case_literal_and_labels.size() / 2);
+		assert(selector_value != 0 && selector_block != 0 && default_label != 0);
 
 		std::string &code = _blocks.at(_current_block);
 
@@ -1387,44 +1252,22 @@ private:
 
 			code += "switch (" + id_to_name(selector_value) + ")\n\t{\n";
 
-			std::vector<id> labels = case_literal_and_labels;
-			for (size_t i = 0; i < labels.size(); i += 2)
+			for (size_t i = 0; i < case_literal_and_labels.size(); i += 2)
 			{
-				if (labels[i + 1] == 0)
-					continue; // Happens if a case was already handled, see below
+				assert(case_literal_and_labels[i + 1] != 0);
 
-				code += "\tcase " + std::to_string(labels[i]) + ": ";
-
-				if (labels[i + 1] == default_label)
-				{
-					code += "default: ";
-					default_label = 0;
-				}
-				else
-				{
-					for (size_t k = i + 2; k < labels.size(); k += 2)
-					{
-						if (labels[k + 1] == 0 || labels[k + 1] != labels[i + 1])
-							continue;
-
-						code += "case " + std::to_string(labels[k]) + ": ";
-						labels[k + 1] = 0;
-					}
-				}
-
-				assert(case_blocks[i / 2] != 0);
-				std::string &case_data = _blocks.at(case_blocks[i / 2]);
+				std::string &case_data = _blocks.at(case_literal_and_labels[i + 1]);
 
 				increase_indentation_level(case_data);
 
-				code += "{\n";
+				code += "\tcase " + std::to_string(case_literal_and_labels[i]) + ": {\n";
 				code += case_data;
 				code += "\t}\n";
 			}
 
-			if (default_label != 0 && default_block != _current_block)
+			if (default_label != _current_block)
 			{
-				std::string &default_data = _blocks.at(default_block);
+				std::string &default_data = _blocks.at(default_label);
 
 				increase_indentation_level(default_data);
 
@@ -1432,7 +1275,7 @@ private:
 				code += default_data;
 				code += "\t}\n";
 
-				_blocks.erase(default_block);
+				_blocks.erase(default_label);
 			}
 
 			code += "\t}\n";
@@ -1446,44 +1289,31 @@ private:
 			if (flags & 0x1) code += "[flatten] ";
 			if (flags & 0x2) code += "[branch] ";
 
-			std::vector<id> labels = case_literal_and_labels;
-			for (size_t i = 0; i < labels.size(); i += 2)
+			for (size_t i = 0; i < case_literal_and_labels.size(); i += 2)
 			{
-				if (labels[i + 1] == 0)
-					continue; // Happens if a case was already handled, see below
+				assert(case_literal_and_labels[i + 1] != 0);
 
-				code += "if (" + id_to_name(selector_value) + " == " + std::to_string(labels[i]);
-
-				for (size_t k = i + 2; k < labels.size(); k += 2)
-				{
-					if (labels[k + 1] == 0 || labels[k + 1] != labels[i + 1])
-						continue;
-
-					code += " || " + id_to_name(selector_value) + " == " + std::to_string(labels[k]);
-					labels[k + 1] = 0;
-				}
-
-				assert(case_blocks[i / 2] != 0);
-				std::string &case_data = _blocks.at(case_blocks[i / 2]);
+				std::string &case_data = _blocks.at(case_literal_and_labels[i + 1]);
 
 				increase_indentation_level(case_data);
 
-				code += ")\n\t{\n";
+				code += "if (" + id_to_name(selector_value) + " == " + std::to_string(case_literal_and_labels[i]) + ")\n\t{\n";
 				code += case_data;
 				code += "\t}\n\telse\n\t";
+
 			}
 
 			code += "{\n";
 
-			if (default_block != _current_block)
+			if (default_label != _current_block)
 			{
-				std::string &default_data = _blocks.at(default_block);
+				std::string &default_data = _blocks.at(default_label);
 
 				increase_indentation_level(default_data);
 
 				code += default_data;
 
-				_blocks.erase(default_block);
+				_blocks.erase(default_label);
 			}
 
 			code += "\t} } while (false);\n";
@@ -1491,8 +1321,8 @@ private:
 
 		// Remove consumed blocks to save memory
 		_blocks.erase(selector_block);
-		for (const id case_block : case_blocks)
-			_blocks.erase(case_block);
+		for (size_t i = 0; i < case_literal_and_labels.size(); i += 2)
+			_blocks.erase(case_literal_and_labels[i + 1]);
 	}
 
 	id   create_block() override
@@ -1530,7 +1360,7 @@ private:
 		{
 			// HLSL compiler doesn't handle discard like a shader kill
 			// Add a return statement to exit functions in case discard is the last control flow statement
-			// See https://docs.microsoft.com/windows/win32/direct3dhlsl/discard--sm4---asm-
+			// See https://docs.microsoft.com/en-us/windows/win32/direct3dhlsl/discard--sm4---asm-
 			code += "\treturn ";
 			write_constant(code, return_type, constant());
 			code += ";\n";

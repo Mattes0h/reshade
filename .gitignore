@@ -7,6 +7,7 @@
 [Rr]elease/
 *.obj
 *.cso
+*.spv
 
 # Visual Studio cache files
 .vs/
@@ -32,7 +33,9 @@ packages/
 .DS_Store
 Thumbs.db
 
-# Versioning and setup files
-/res/[Vv]ersion.h
-/setup/Config/*.ini
+# Versioning
+/res/Version.h
 /setup/Properties/AssemblyInfo.cs
+
+/res/SetupCompatibility.ini
+/res/SetupEffectPackages.ini

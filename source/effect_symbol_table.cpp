@@ -5,24 +5,25 @@
 
 #include "effect_symbol_table.hpp"
 #include <cassert>
-#include <malloc.h> // alloca
 #include <algorithm> // std::upper_bound, std::sort
 
 #pragma region Import intrinsic functions
 
+using namespace reshadefx;
+
 struct intrinsic
 {
-	intrinsic(const char *name, unsigned int id, const reshadefx::type &ret_type, std::initializer_list<reshadefx::type> arg_types) : id(id)
+	intrinsic(const char *name, unsigned int id, const type &ret_type, std::initializer_list<type> arg_types) : id(id)
 	{
 		function.name = name;
 		function.return_type = ret_type;
 		function.parameter_list.reserve(arg_types.size());
-		for (const reshadefx::type &arg_type : arg_types)
+		for (const type &arg_type : arg_types)
 			function.parameter_list.push_back({ arg_type, {}, {}, {} });
 	}
 
 	unsigned int id;
-	reshadefx::function_info function;
+	function_info function;
 };
 
 // Import intrinsic callback functions
@@ -40,40 +41,22 @@ enum {
 #define int2 { reshadefx::type::t_int, 2, 1 }
 #define int3 { reshadefx::type::t_int, 3, 1 }
 #define int4 { reshadefx::type::t_int, 4, 1 }
-#define int2x3 { reshadefx::type::t_int, 2, 3 }
-#define int2x2 { reshadefx::type::t_int, 2, 2 }
-#define int2x4 { reshadefx::type::t_int, 2, 4 }
-#define int3x2 { reshadefx::type::t_int, 3, 2 }
-#define int3x3 { reshadefx::type::t_int, 3, 3 }
-#define int3x4 { reshadefx::type::t_int, 3, 4 }
-#define int4x2 { reshadefx::type::t_int, 4, 2 }
-#define int4x3 { reshadefx::type::t_int, 4, 3 }
-#define int4x4 { reshadefx::type::t_int, 4, 4 }
-#define inout_int { reshadefx::type::t_int, 1, 1, reshadefx::type::q_inout | reshadefx::type::q_groupshared }
 #define uint { reshadefx::type::t_uint, 1, 1 }
 #define uint2 { reshadefx::type::t_uint, 2, 1 }
 #define uint3 { reshadefx::type::t_uint, 3, 1 }
 #define uint4 { reshadefx::type::t_uint, 4, 1 }
-#define inout_uint { reshadefx::type::t_uint, 1, 1, reshadefx::type::q_inout | reshadefx::type::q_groupshared }
 #define float { reshadefx::type::t_float, 1, 1 }
 #define float2 { reshadefx::type::t_float, 2, 1 }
 #define float3 { reshadefx::type::t_float, 3, 1 }
 #define float4 { reshadefx::type::t_float, 4, 1 }
-#define float2x3 { reshadefx::type::t_float, 2, 3 }
 #define float2x2 { reshadefx::type::t_float, 2, 2 }
-#define float2x4 { reshadefx::type::t_float, 2, 4 }
-#define float3x2 { reshadefx::type::t_float, 3, 2 }
 #define float3x3 { reshadefx::type::t_float, 3, 3 }
-#define float3x4 { reshadefx::type::t_float, 3, 4 }
-#define float4x2 { reshadefx::type::t_float, 4, 2 }
-#define float4x3 { reshadefx::type::t_float, 4, 3 }
 #define float4x4 { reshadefx::type::t_float, 4, 4 }
 #define out_float { reshadefx::type::t_float, 1, 1, reshadefx::type::q_out }
 #define out_float2 { reshadefx::type::t_float, 2, 1, reshadefx::type::q_out }
 #define out_float3 { reshadefx::type::t_float, 3, 1, reshadefx::type::q_out }
 #define out_float4 { reshadefx::type::t_float, 4, 1, reshadefx::type::q_out }
 #define sampler { reshadefx::type::t_sampler }
-#define storage { reshadefx::type::t_storage }
 
 // Import intrinsic function definitions
 #define DEFINE_INTRINSIC(name, i, ret_type, ...) intrinsic(#name, name##i, ret_type, { __VA_ARGS__ }),
@@ -106,7 +89,6 @@ static const intrinsic s_intrinsics[] = {
 #undef out_float3
 #undef out_float4
 #undef sampler
-#undef storage
 
 #pragma endregion
 
@@ -123,18 +105,15 @@ unsigned int reshadefx::type::rank(const type &src, const type &dst)
 	//  - Floating point has a higher rank than integer types
 	//  - Integer to floating point promotion has a higher rank than floating point to integer conversion
 	//  - Signed to unsigned integer conversion has a higher rank than unsigned to signed integer conversion
-	static const int ranks[7][7] = {
-		{ 5, 4, 4, 4, 4, 4, 4 }, // bool
-		{ 3, 5, 5, 2, 2, 4, 4 }, // min16int
-		{ 3, 5, 5, 2, 2, 4, 4 }, // int
-		{ 3, 1, 1, 5, 5, 4, 4 }, // min16uint
-		{ 3, 1, 1, 5, 5, 4, 4 }, // uint
-		{ 3, 3, 3, 3, 3, 6, 6 }, // min16float
-		{ 3, 3, 3, 3, 3, 6, 6 }  // float
+	static const int ranks[4][4] = {
+		{ 5, 4, 4, 4 },
+		{ 3, 5, 2, 4 },
+		{ 3, 1, 5, 4 },
+		{ 3, 3, 3, 6 }
 	};
 
-	assert(src.base > 0 && src.base <= 7); // bool - float
-	assert(dst.base > 0 && dst.base <= 7);
+	assert(src.base > 0 && src.base <= 4);
+	assert(dst.base > 0 && dst.base <= 4);
 
 	const int rank = ranks[src.base - 1][dst.base - 1] << 2;
 
@@ -142,7 +121,7 @@ unsigned int reshadefx::type::rank(const type &src, const type &dst)
 		return rank >> 1; // Scalar to vector promotion has a lower rank
 	if ((src.is_vector() && dst.is_scalar()) || (src.is_vector() == dst.is_vector() && src.rows > dst.rows && src.cols >= dst.cols))
 		return rank >> 2; // Vector to scalar conversion has an even lower rank
-	if ((src.is_vector() != dst.is_vector()) ||  src.is_matrix() != dst.is_matrix() || src.components() != dst.components())
+	if ((src.is_vector() != dst.is_vector()) || src.is_matrix() != dst.is_matrix() || src.components() != dst.components())
 		return 0; // If components weren't converted at this point, the types are not compatible
 
 	return rank * src.components(); // More components causes a higher rank
@@ -244,12 +223,12 @@ bool reshadefx::symbol_table::insert_symbol(const std::string &name, const symbo
 	return true;
 }
 
-reshadefx::scoped_symbol reshadefx::symbol_table::find_symbol(const std::string &name) const
+reshadefx::symbol reshadefx::symbol_table::find_symbol(const std::string &name) const
 {
 	// Default to start search with current scope and walk back the scope chain
 	return find_symbol(name, _current_scope, false);
 }
-reshadefx::scoped_symbol reshadefx::symbol_table::find_symbol(const std::string &name, const scope &scope, bool exclusive) const
+reshadefx::symbol reshadefx::symbol_table::find_symbol(const std::string &name, const scope &scope, bool exclusive) const
 {
 	const auto stack_it = _symbol_stack.find(name);
 
@@ -258,7 +237,7 @@ reshadefx::scoped_symbol reshadefx::symbol_table::find_symbol(const std::string 
 		return {};
 
 	// Walk up the scope chain starting at the requested scope level and find a matching symbol
-	scoped_symbol result = {};
+	symbol result = {};
 
 	for (auto it = stack_it->second.rbegin(), end = stack_it->second.rend(); it != end; ++it)
 	{
@@ -285,13 +264,11 @@ static int compare_functions(const std::vector<reshadefx::expression> &arguments
 	bool function1_viable = true;
 	const auto function1_ranks = static_cast<unsigned int *>(alloca(num_arguments * sizeof(unsigned int)));
 	for (size_t i = 0; i < num_arguments; ++i)
-	{
 		if ((function1_ranks[i] = reshadefx::type::rank(arguments[i].type, function1->parameter_list[i].type)) == 0)
 		{
 			function1_viable = false;
 			break;
 		}
-	}
 
 	// Catch case where the second function does not exist
 	if (function2 == nullptr)
@@ -301,13 +278,11 @@ static int compare_functions(const std::vector<reshadefx::expression> &arguments
 	bool function2_viable = true;
 	const auto function2_ranks = static_cast<unsigned int *>(alloca(num_arguments * sizeof(unsigned int)));
 	for (size_t i = 0; i < num_arguments; ++i)
-	{
 		if ((function2_ranks[i] = reshadefx::type::rank(arguments[i].type, function2->parameter_list[i].type)) == 0)
 		{
 			function2_viable = false;
 			break;
 		}
-	}
 
 	// If one of the functions is not viable, then the other one automatically wins
 	if (!function1_viable || !function2_viable)
