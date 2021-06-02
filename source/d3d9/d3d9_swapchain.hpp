@@ -6,7 +6,7 @@
 #pragma once
 
 #include <d3d9.h>
-#include <memory>
+#include <memory> // std::shared_ptr
 
 struct Direct3DDevice9;
 namespace reshade::d3d9 { class runtime_d3d9; }
@@ -37,6 +37,8 @@ struct __declspec(uuid("BC52FCE4-1EAC-40C8-84CF-863600BBAA01")) Direct3DSwapChai
 	HRESULT STDMETHODCALLTYPE GetPresentStats(D3DPRESENTSTATS *pPresentationStatistics) override;
 	HRESULT STDMETHODCALLTYPE GetDisplayModeEx(D3DDISPLAYMODEEX *pMode, D3DDISPLAYROTATION *pRotation) override;
 	#pragma endregion
+
+	static bool is_presenting_entire_surface(const RECT *source_rect, HWND hwnd);
 
 	bool check_and_upgrade_interface(REFIID riid);
 

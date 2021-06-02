@@ -22,8 +22,10 @@ namespace reshadefx
 			bool ignore_pp_directives = true,
 			bool ignore_line_directives = false,
 			bool ignore_keywords = false,
-			bool escape_string_literals = true) :
+			bool escape_string_literals = true,
+			const location &start_location = location()) :
 			_input(std::move(input)),
+			_cur_location(start_location),
 			_ignore_comments(ignore_comments),
 			_ignore_whitespace(ignore_whitespace),
 			_ignore_pp_directives(ignore_pp_directives),
@@ -40,7 +42,7 @@ namespace reshadefx
 		{
 			_input = lexer._input;
 			_cur_location = lexer._cur_location;
-			_cur = _input.data() + (lexer._cur - lexer._input.data());
+			reset_to_offset(lexer._cur - lexer._input.data());
 			_end = _input.data() + _input.size();
 			_ignore_comments = lexer._ignore_comments;
 			_ignore_whitespace = lexer._ignore_whitespace;
@@ -51,6 +53,11 @@ namespace reshadefx
 
 			return *this;
 		}
+
+		/// <summary>
+		/// Get the current position in the input string.
+		/// </summary>
+		size_t input_offset() const { return _cur - _input.data(); }
 
 		/// <summary>
 		/// Get the input string this lexical analyzer works on.
@@ -73,6 +80,12 @@ namespace reshadefx
 		/// </summary>
 		void skip_to_next_line();
 
+		/// <summary>
+		/// Reset position to the specified <paramref name="offset"/>.
+		/// </summary>
+		/// <param name="offset">Offset in characters from the start of the input string.</param>
+		void reset_to_offset(size_t offset);
+
 	private:
 		/// <summary>
 		/// Skips an arbitrary amount of characters in the input string.
@@ -82,7 +95,7 @@ namespace reshadefx
 
 		void parse_identifier(token &tok) const;
 		bool parse_pp_directive(token &tok);
-		void parse_string_literal(token &tok, bool escape) const;
+		void parse_string_literal(token &tok, bool escape);
 		void parse_numeric_literal(token &tok) const;
 
 		std::string _input;

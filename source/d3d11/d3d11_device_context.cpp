@@ -12,28 +12,28 @@ D3D11DeviceContext::D3D11DeviceContext(D3D11Device *device, ID3D11DeviceContext 
 	_orig(original),
 	_interface_version(0),
 	_device(device),
-	_buffer_detection(original) {
+	_state(original) {
 	assert(_orig != nullptr && _device != nullptr);
 }
 D3D11DeviceContext::D3D11DeviceContext(D3D11Device *device, ID3D11DeviceContext1 *original) :
 	_orig(original),
 	_interface_version(1),
 	_device(device),
-	_buffer_detection(original) {
+	_state(original) {
 	assert(_orig != nullptr && _device != nullptr);
 }
 D3D11DeviceContext::D3D11DeviceContext(D3D11Device *device, ID3D11DeviceContext2 *original) :
 	_orig(original),
 	_interface_version(2),
 	_device(device),
-	_buffer_detection(original) {
+	_state(original) {
 	assert(_orig != nullptr && _device != nullptr);
 }
 D3D11DeviceContext::D3D11DeviceContext(D3D11Device *device, ID3D11DeviceContext3 *original) :
 	_orig(original),
 	_interface_version(3),
 	_device(device),
-	_buffer_detection(original) {
+	_state(original) {
 	assert(_orig != nullptr && _device != nullptr);
 }
 
@@ -101,7 +101,8 @@ ULONG   STDMETHODCALLTYPE D3D11DeviceContext::Release()
 	if (ref != 0)
 		return _orig->Release(), ref;
 
-	_buffer_detection.reset(true);
+	// Only the immediate context holds references to buffer detection resources
+	_state.reset(this == _device->_immediate_context);
 
 	const ULONG ref_orig = _orig->Release();
 	if (ref_orig != 0) // Verify internal reference count
@@ -158,13 +159,13 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::VSSetShader(ID3D11VertexShader *pV
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::DrawIndexed(UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 {
+	_state.on_draw(IndexCount);
 	_orig->DrawIndexed(IndexCount, StartIndexLocation, BaseVertexLocation);
-	_buffer_detection.on_draw(IndexCount);
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::Draw(UINT VertexCount, UINT StartVertexLocation)
 {
+	_state.on_draw(VertexCount);
 	_orig->Draw(VertexCount, StartVertexLocation);
-	_buffer_detection.on_draw(VertexCount);
 }
 HRESULT STDMETHODCALLTYPE D3D11DeviceContext::Map(ID3D11Resource *pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE *pMappedResource)
 {
@@ -192,13 +193,13 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::IASetIndexBuffer(ID3D11Buffer *pIn
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::DrawIndexedInstanced(UINT IndexCountPerInstance, UINT InstanceCount, UINT StartIndexLocation, INT BaseVertexLocation, UINT StartInstanceLocation)
 {
+	_state.on_draw(IndexCountPerInstance * InstanceCount);
 	_orig->DrawIndexedInstanced(IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
-	_buffer_detection.on_draw(IndexCountPerInstance * InstanceCount);
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::DrawInstanced(UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation)
 {
+	_state.on_draw(VertexCountPerInstance * InstanceCount);
 	_orig->DrawInstanced(VertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
-	_buffer_detection.on_draw(VertexCountPerInstance * InstanceCount);
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::GSSetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer *const *ppConstantBuffers)
 {
@@ -266,18 +267,18 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::SOSetTargets(UINT NumBuffers, ID3D
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::DrawAuto()
 {
+	_state.on_draw(0);
 	_orig->DrawAuto();
-	_buffer_detection.on_draw(0);
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::DrawIndexedInstancedIndirect(ID3D11Buffer *pBufferForArgs, UINT AlignedByteOffsetForArgs)
 {
+	_state.on_draw(0);
 	_orig->DrawIndexedInstancedIndirect(pBufferForArgs, AlignedByteOffsetForArgs);
-	_buffer_detection.on_draw(0);
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::DrawInstancedIndirect(ID3D11Buffer *pBufferForArgs, UINT AlignedByteOffsetForArgs)
 {
+	_state.on_draw(0);
 	_orig->DrawInstancedIndirect(pBufferForArgs, AlignedByteOffsetForArgs);
-	_buffer_detection.on_draw(0);
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::Dispatch(UINT ThreadGroupCountX, UINT ThreadGroupCountY, UINT ThreadGroupCountZ)
 {
@@ -330,7 +331,7 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::ClearUnorderedAccessViewFloat(ID3D
 void    STDMETHODCALLTYPE D3D11DeviceContext::ClearDepthStencilView(ID3D11DepthStencilView *pDepthStencilView, UINT ClearFlags, FLOAT Depth, UINT8 Stencil)
 {
 #if RESHADE_DEPTH
-	_buffer_detection.on_clear_depthstencil(ClearFlags, pDepthStencilView);
+	_state.on_clear_depthstencil(ClearFlags, pDepthStencilView);
 #endif
 	_orig->ClearDepthStencilView(pDepthStencilView, ClearFlags, Depth, Stencil);
 }
@@ -359,7 +360,7 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::ExecuteCommandList(ID3D11CommandLi
 		static_cast<D3D11CommandList *>(pCommandList);
 
 	// Merge command list trackers into device one
-	_buffer_detection.merge(command_list_proxy->_buffer_detection);
+	_state.merge(command_list_proxy->_state);
 
 	// Get original command list pointer from proxy object and execute with it
 	_orig->ExecuteCommandList(command_list_proxy->_orig, RestoreContextState);
@@ -588,13 +589,13 @@ HRESULT STDMETHODCALLTYPE D3D11DeviceContext::FinishCommandList(BOOL RestoreDefe
 		assert(ppCommandList != nullptr);
 
 		const auto command_list_proxy = new D3D11CommandList(_device, *ppCommandList);
-		command_list_proxy->_buffer_detection.merge(_buffer_detection);
+		command_list_proxy->_state.merge(_state);
 
 		*ppCommandList = command_list_proxy;
 	}
 
 	// All statistics are now stored in the command list tracker, so reset current tracker here
-	_buffer_detection.reset(false);
+	_state.reset(false);
 
 	return hr;
 }

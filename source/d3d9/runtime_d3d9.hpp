@@ -7,14 +7,14 @@
 
 #include "runtime.hpp"
 #include "state_block.hpp"
-#include "buffer_detection.hpp"
+#include "state_tracking.hpp"
 
 namespace reshade::d3d9
 {
 	class runtime_d3d9 : public runtime
 	{
 	public:
-		runtime_d3d9(IDirect3DDevice9 *device, IDirect3DSwapChain9 *swapchain);
+		runtime_d3d9(IDirect3DDevice9 *device, IDirect3DSwapChain9 *swapchain, state_tracking *state_tracking);
 		~runtime_d3d9();
 
 		bool on_init(const D3DPRESENT_PARAMETERS &pp);
@@ -22,8 +22,6 @@ namespace reshade::d3d9
 		void on_present();
 
 		bool capture_screenshot(uint8_t *buffer) const override;
-
-		buffer_detection *_buffer_detection = nullptr;
 
 	private:
 		bool init_effect(size_t index) override;
@@ -37,9 +35,11 @@ namespace reshade::d3d9
 		void render_technique(technique &technique) override;
 
 		state_block _app_state;
+		state_tracking &_state_tracking;
 		com_ptr<IDirect3D9> _d3d;
 		const com_ptr<IDirect3DDevice9> _device;
 		const com_ptr<IDirect3DSwapChain9> _swapchain;
+
 		unsigned int _max_vertices = 0;
 		unsigned int _num_samplers;
 		unsigned int _num_simultaneous_rendertargets;
@@ -72,7 +72,7 @@ namespace reshade::d3d9
 #endif
 
 #if RESHADE_DEPTH
-		void draw_depth_debug_menu(buffer_detection &tracker);
+		void draw_depth_debug_menu();
 		void update_depth_texture_bindings(com_ptr<IDirect3DSurface9> surface);
 
 		com_ptr<IDirect3DTexture9> _depth_texture;
@@ -80,9 +80,6 @@ namespace reshade::d3d9
 
 		bool _disable_intz = false;
 		bool _reset_buffer_detection = false;
-		bool _filter_aspect_ratio = true;
-		bool _preserve_depth_buffers = false;
-		UINT _depth_clear_index_override = std::numeric_limits<UINT>::max();
 		IDirect3DSurface9 *_depth_surface_override = nullptr;
 #endif
 	};

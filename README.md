@@ -7,13 +7,12 @@ The ReShade FX shader compiler contained in this repository is standalone, so ca
 
 ## Building
 
-You'll need Visual Studio 2017 or higher to build ReShade and Python for the `gl3w` dependency. The [Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows) is required if building with Vulkan support.
+You'll need Visual Studio 2017 or higher to build ReShade and Python for the `gl3w` dependency.
 
 1. Clone this repository including all Git submodules
 2. Open the Visual Studio solution
-3. Select either the "32-bit" or "64-bit" target platform and build the solution (this will build ReShade and all dependencies).
-
-After the first build, a `version.h` file will show up in the [res](/res) directory. Change the `VERSION_FULL` definition inside to something matching the current release version and rebuild so that shaders from the official repository at https://github.com/crosire/reshade-shaders won't cause a version mismatch error during compilation.
+3. Select either the `32-bit` or `64-bit` target platform and build the solution.\
+   This will build ReShade and all dependencies. To build the setup tool, first build the `Release` configuration for both `32-bit` and `64-bit` targets and only afterwards build the `Release Setup` configuration (does not matter which target is selected then).
 
 A quick overview of what some of the source code files contain:
 

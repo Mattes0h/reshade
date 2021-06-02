@@ -6,6 +6,7 @@
 #pragma once
 
 #include "effect_expression.hpp"
+#include <unordered_set>
 
 namespace reshadefx
 {
@@ -116,7 +117,19 @@ namespace reshadefx
 	};
 
 	/// <summary>
-	/// A struct type defined in the shader code.
+	/// Specifies the possible primitives.
+	/// </summary>
+	enum class primitive_topology : uint8_t
+	{
+		point_list = 1,
+		line_list,
+		line_strip,
+		triangle_list,
+		triangle_strip,
+	};
+
+	/// <summary>
+	/// A struct type defined in the effect code.
 	/// </summary>
 	struct struct_info
 	{
@@ -127,7 +140,7 @@ namespace reshadefx
 	};
 
 	/// <summary>
-	/// A struct field defined in the shader code.
+	/// A struct field defined in the effect code.
 	/// </summary>
 	struct struct_member_info
 	{
@@ -149,7 +162,7 @@ namespace reshadefx
 	};
 
 	/// <summary>
-	/// A texture defined in the shader code.
+	/// A texture defined in the effect code.
 	/// </summary>
 	struct texture_info
 	{
@@ -162,10 +175,12 @@ namespace reshadefx
 		uint32_t height = 1;
 		uint32_t levels = 1;
 		texture_format format = texture_format::rgba8;
+		bool render_target = false;
+		bool storage_access = false;
 	};
 
 	/// <summary>
-	/// A texture sampler defined in the shader code.
+	/// A texture sampler defined in the effect code.
 	/// </summary>
 	struct sampler_info
 	{
@@ -179,14 +194,25 @@ namespace reshadefx
 		texture_address_mode address_u = texture_address_mode::clamp;
 		texture_address_mode address_v = texture_address_mode::clamp;
 		texture_address_mode address_w = texture_address_mode::clamp;
-		float min_lod = -3.402823466e+38f; // FLT_MAX
-		float max_lod = +3.402823466e+38f;
+		float min_lod = -3.402823466e+38f;
+		float max_lod = +3.402823466e+38f; // FLT_MAX
 		float lod_bias = 0.0f;
 		uint8_t srgb = false;
 	};
 
 	/// <summary>
-	/// An uniform variable defined in the shader code.
+	/// A texture storage object defined in the effect code.
+	/// </summary>
+	struct storage_info
+	{
+		uint32_t id = 0;
+		uint32_t binding = 0;
+		std::string unique_name;
+		std::string texture_name;
+	};
+
+	/// <summary>
+	/// An uniform variable defined in the effect code.
 	/// </summary>
 	struct uniform_info
 	{
@@ -200,16 +226,26 @@ namespace reshadefx
 	};
 
 	/// <summary>
+	/// Type of a shader entry point.
+	/// </summary>
+	enum class shader_type
+	{
+		vs,
+		ps,
+		cs,
+	};
+
+	/// <summary>
 	/// A shader entry point function.
 	/// </summary>
 	struct entry_point
 	{
 		std::string name;
-		bool is_pixel_shader;
+		shader_type type;
 	};
 
 	/// <summary>
-	/// A function defined in the shader code.
+	/// A function defined in the effect code.
 	/// </summary>
 	struct function_info
 	{
@@ -219,6 +255,8 @@ namespace reshadefx
 		reshadefx::type return_type;
 		std::string return_semantic;
 		std::vector<struct_member_info> parameter_list;
+		std::unordered_set<uint32_t> referenced_samplers;
+		std::unordered_set<uint32_t> referenced_storages;
 	};
 
 	/// <summary>
@@ -226,9 +264,11 @@ namespace reshadefx
 	/// </summary>
 	struct pass_info
 	{
+		std::string name;
 		std::string render_target_names[8] = {};
 		std::string vs_entry_point;
 		std::string ps_entry_point;
+		std::string cs_entry_point;
 		uint8_t clear_render_targets = false;
 		uint8_t srgb_write_enable = false;
 		uint8_t blend_enable = false;
@@ -248,8 +288,12 @@ namespace reshadefx
 		pass_stencil_op stencil_op_fail = pass_stencil_op::keep;
 		pass_stencil_op stencil_op_depth_fail = pass_stencil_op::keep;
 		uint32_t num_vertices = 3;
+		primitive_topology topology = primitive_topology::triangle_list;
 		uint32_t viewport_width = 0;
 		uint32_t viewport_height = 0;
+		uint32_t viewport_dispatch_z = 1;
+		std::vector<sampler_info> samplers;
+		std::vector<storage_info> storages;
 	};
 
 	/// <summary>
@@ -273,11 +317,13 @@ namespace reshadefx
 		std::vector<entry_point> entry_points;
 		std::vector<texture_info> textures;
 		std::vector<sampler_info> samplers;
+		std::vector<storage_info> storages;
 		std::vector<uniform_info> uniforms, spec_constants;
 		std::vector<technique_info> techniques;
 
 		uint32_t total_uniform_size = 0;
-		uint32_t num_sampler_bindings = 0;
 		uint32_t num_texture_bindings = 0;
+		uint32_t num_sampler_bindings = 0;
+		uint32_t num_storage_bindings = 0;
 	};
 }

@@ -8,9 +8,11 @@
 #include "d3d11_device.hpp"
 #include "d3d11_device_context.hpp"
 
+extern thread_local bool g_in_dxgi_runtime;
+
 HOOK_EXPORT HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter *pAdapter, D3D_DRIVER_TYPE DriverType, HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL *pFeatureLevels, UINT FeatureLevels, UINT SDKVersion, ID3D11Device **ppDevice, D3D_FEATURE_LEVEL *pFeatureLevel, ID3D11DeviceContext **ppImmediateContext)
 {
-	LOG(INFO) << "Redirecting D3D11CreateDevice" << '('
+	LOG(INFO) << "Redirecting " << "D3D11CreateDevice" << '('
 		<<   "pAdapter = " << pAdapter
 		<< ", DriverType = " << DriverType
 		<< ", Software = " << Software
@@ -22,14 +24,20 @@ HOOK_EXPORT HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter *pAdapter, D3D_DRIVER_
 		<< ", pFeatureLevel = " << pFeatureLevel
 		<< ", ppImmediateContext = " << ppImmediateContext
 		<< ')' << " ...";
-	LOG(INFO) << "> Passing on to D3D11CreateDeviceAndSwapChain:";
+	LOG(INFO) << "> Passing on to " << "D3D11CreateDeviceAndSwapChain" << ':';
 
+	// The D3D runtime does this internally anyway, so to avoid duplicate hooks, always pass on to D3D11CreateDeviceAndSwapChain
 	return D3D11CreateDeviceAndSwapChain(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, nullptr, nullptr, ppDevice, pFeatureLevel, ppImmediateContext);
 }
 
 HOOK_EXPORT HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter *pAdapter, D3D_DRIVER_TYPE DriverType, HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL *pFeatureLevels, UINT FeatureLevels, UINT SDKVersion, const DXGI_SWAP_CHAIN_DESC *pSwapChainDesc, IDXGISwapChain **ppSwapChain, ID3D11Device **ppDevice, D3D_FEATURE_LEVEL *pFeatureLevel, ID3D11DeviceContext **ppImmediateContext)
 {
-	LOG(INFO) << "Redirecting D3D11CreateDeviceAndSwapChain" << '('
+	// Pass on unmodified in case this called from within 'IDXGISwapChain::Present' or 'IDXGIFactory::CreateSwapChain' or 'D3D10CreateDeviceAndSwapChain1', which indicates that the DXGI runtime is trying to create an internal device, which should not be hooked
+	if (g_in_dxgi_runtime)
+		return reshade::hooks::call(D3D11CreateDeviceAndSwapChain)(
+			pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, pSwapChainDesc, ppSwapChain, ppDevice, pFeatureLevel, ppImmediateContext);
+
+	LOG(INFO) << "Redirecting " << "D3D11CreateDeviceAndSwapChain" << '('
 		<<   "pAdapter = " << pAdapter
 		<< ", DriverType = " << DriverType
 		<< ", Software = " << Software
@@ -55,7 +63,7 @@ HOOK_EXPORT HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter *pAdapter,
 	HRESULT hr = reshade::hooks::call(D3D11CreateDeviceAndSwapChain)(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, nullptr, nullptr, ppDevice, &FeatureLevel, nullptr);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "D3D11CreateDeviceAndSwapChain failed with error code " << hr << '!';
+		LOG(WARN) << "D3D11CreateDeviceAndSwapChain" << " failed with error code " << hr << '!';
 		return hr;
 	}
 
@@ -115,7 +123,7 @@ HOOK_EXPORT HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter *pAdapter,
 		hr = adapter->GetParent(IID_PPV_ARGS(&factory));
 		assert(SUCCEEDED(hr));
 
-		LOG(INFO) << "> Calling IDXGIFactory::CreateSwapChain:";
+		LOG(INFO) << "> Calling " << "IDXGIFactory::CreateSwapChain" << ':';
 
 		hr = factory->CreateSwapChain(device, const_cast<DXGI_SWAP_CHAIN_DESC *>(pSwapChainDesc), ppSwapChain);
 	}
@@ -125,7 +133,7 @@ HOOK_EXPORT HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter *pAdapter,
 		if (device_proxy != nullptr)
 		{
 #if RESHADE_VERBOSE_LOG
-			LOG(INFO) << "Returning IDXGIDevice1 object " << device_proxy->_dxgi_device << " and ID3D11Device object " << device_proxy << '.';
+			LOG(INFO) << "Returning ID3D11Device0 object " << device_proxy << " and IDXGIDevice1 object " << device_proxy->_dxgi_device << '.';
 #endif
 			*ppDevice = device_proxy;
 		}

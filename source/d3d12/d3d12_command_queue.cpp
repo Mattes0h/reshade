@@ -68,7 +68,6 @@ HRESULT STDMETHODCALLTYPE D3D12CommandQueue::QueryInterface(REFIID riid, void **
 		return S_OK;
 	}
 
-#if RESHADE_D3D12ON7
 	// Special case for d3d12on7
 	if (riid == __uuidof(ID3D12CommandQueueDownlevel))
 	{
@@ -78,7 +77,6 @@ HRESULT STDMETHODCALLTYPE D3D12CommandQueue::QueryInterface(REFIID riid, void **
 		if (_downlevel != nullptr)
 			return _downlevel->QueryInterface(riid, ppvObj);
 	}
-#endif
 
 	return _orig->QueryInterface(riid, ppvObj);
 }
@@ -93,13 +91,11 @@ ULONG   STDMETHODCALLTYPE D3D12CommandQueue::Release()
 	if (ref != 0)
 		return _orig->Release(), ref;
 
-#if RESHADE_D3D12ON7
 	if (_downlevel != nullptr)
 		_downlevel->Release();
-#endif
 
 	const ULONG ref_orig = _orig->Release();
-	if (ref_orig != 0)
+	if (ref_orig != 0) // Verify internal reference count
 		LOG(WARN) << "Reference count for ID3D12CommandQueue" << _interface_version << " object " << this << " is inconsistent.";
 
 #if RESHADE_VERBOSE_LOG
@@ -154,7 +150,7 @@ void    STDMETHODCALLTYPE D3D12CommandQueue::ExecuteCommandLists(UINT NumCommand
 			const std::lock_guard<std::mutex> lock(s_global_mutex);
 
 			// Merge command list trackers into device one
-			_device->_buffer_detection.merge(command_list_proxy->_buffer_detection);
+			_device->_state.merge(command_list_proxy->_state);
 
 			// Get original command list pointer from proxy object
 			command_lists[i] = command_list_proxy->_orig;

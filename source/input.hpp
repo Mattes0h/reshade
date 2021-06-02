@@ -15,7 +15,7 @@ namespace reshade
 	{
 	public:
 		/// <summary>
-		/// Abstraction of a window handle.
+		/// A window handle (HWND).
 		/// </summary>
 		using window_handle = void *;
 
@@ -37,8 +37,8 @@ namespace reshade
 
 		bool is_key_down(unsigned int keycode) const;
 		bool is_key_pressed(unsigned int keycode) const;
-		bool is_key_pressed(unsigned int keycode, bool ctrl, bool shift, bool alt) const;
-		bool is_key_pressed(const unsigned int key[4]) const { return is_key_pressed(key[0], key[1] != 0, key[2] != 0, key[3] != 0); }
+		bool is_key_pressed(unsigned int keycode, bool ctrl, bool shift, bool alt, bool force_modifiers = false) const;
+		bool is_key_pressed(const unsigned int key[4], bool force_modifiers = false) const { return is_key_pressed(key[0], key[1] != 0, key[2] != 0, key[3] != 0, force_modifiers); }
 		bool is_key_released(unsigned int keycode) const;
 		bool is_any_key_down() const;
 		bool is_any_key_pressed() const;
@@ -58,20 +58,19 @@ namespace reshade
 		unsigned int mouse_position_y() const { return _mouse_position[1]; }
 
 		/// <summary>
-		/// Character input as captured by 'WM_CHAR' for the current frame.
+		/// Returns the character input as captured by 'WM_CHAR' for the current frame.
 		/// </summary>
 		const std::wstring &text_input() const { return _text_input; }
 
 		/// <summary>
 		/// Set to <c>true</c> to prevent mouse input window messages from reaching the application.
 		/// </summary>
-		void block_mouse_input(bool enable);
+		void block_mouse_input(bool enable) { _block_mouse = enable; }
+		bool is_blocking_mouse_input() const { return _block_mouse; }
 		/// <summary>
 		/// Set to <c>true</c> to prevent keyboard input window messages from reaching the application.
 		/// </summary>
-		void block_keyboard_input(bool enable);
-
-		bool is_blocking_mouse_input() const { return _block_mouse; }
+		void block_keyboard_input(bool enable) { _block_keyboard = enable; }
 		bool is_blocking_keyboard_input() const { return _block_keyboard; }
 
 		/// <summary>
@@ -110,12 +109,11 @@ namespace reshade
 		bool _block_mouse = false;
 		bool _block_keyboard = false;
 		uint8_t _keys[256] = {};
-		uint8_t _mouse_buttons[5] = {};
 		unsigned int _keys_time[256] = {};
 		short _mouse_wheel_delta = 0;
 		unsigned int _mouse_position[2] = {};
 		unsigned int _last_mouse_position[2] = {};
-		uint64_t _frame_count = 0;
+		uint64_t _frame_count = 0; // Keep track of frame count to identify windows with a lot of rendering
 		std::wstring _text_input;
 	};
 }

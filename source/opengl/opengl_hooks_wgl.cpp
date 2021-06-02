@@ -15,15 +15,17 @@
 
 DECLARE_HANDLE(HPBUFFERARB);
 
+static bool s_hooks_installed = false;
 static std::mutex s_mutex;
 static std::unordered_set<HDC> s_pbuffer_device_contexts;
+static std::unordered_set<HGLRC> s_legacy_contexts;
 static std::unordered_map<HGLRC, HGLRC> s_shared_contexts;
 static std::unordered_map<HGLRC, reshade::opengl::runtime_gl *> s_opengl_runtimes;
 thread_local reshade::opengl::runtime_gl *g_current_runtime = nullptr;
 
 HOOK_EXPORT int   WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR *ppfd)
 {
-	LOG(INFO) << "Redirecting wglChoosePixelFormat" << '(' << "hdc = " << hdc << ", ppfd = " << ppfd << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglChoosePixelFormat" << '(' << "hdc = " << hdc << ", ppfd = " << ppfd << ')' << " ...";
 
 	assert(ppfd != nullptr);
 
@@ -53,13 +55,13 @@ HOOK_EXPORT int   WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPT
 	if (format != 0)
 		LOG(INFO) << "> Returning pixel format: " << format;
 	else
-		LOG(WARN) << "wglChoosePixelFormat failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglChoosePixelFormat" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 
 	return format;
 }
 			BOOL  WINAPI wglChoosePixelFormatARB(HDC hdc, const int *piAttribIList, const FLOAT *pfAttribFList, UINT nMaxFormats, int *piFormats, UINT *nNumFormats)
 {
-	LOG(INFO) << "Redirecting wglChoosePixelFormatARB" << '(' << "hdc = " << hdc << ", piAttribIList = " << piAttribIList << ", pfAttribFList = " << pfAttribFList << ", nMaxFormats = " << nMaxFormats << ", piFormats = " << piFormats << ", nNumFormats = " << nNumFormats << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglChoosePixelFormatARB" << '(' << "hdc = " << hdc << ", piAttribIList = " << piAttribIList << ", pfAttribFList = " << pfAttribFList << ", nMaxFormats = " << nMaxFormats << ", piFormats = " << piFormats << ", nNumFormats = " << nNumFormats << ')' << " ...";
 
 	struct attribute
 	{
@@ -227,7 +229,7 @@ HOOK_EXPORT int   WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPT
 
 	if (!reshade::hooks::call(wglChoosePixelFormatARB)(hdc, piAttribIList, pfAttribFList, nMaxFormats, piFormats, nNumFormats))
 	{
-		LOG(WARN) << "wglChoosePixelFormatARB failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglChoosePixelFormatARB" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return FALSE;
 	}
 
@@ -275,11 +277,11 @@ HOOK_EXPORT int   WINAPI wglGetPixelFormat(HDC hdc)
 }
 HOOK_EXPORT BOOL  WINAPI wglSetPixelFormat(HDC hdc, int iPixelFormat, const PIXELFORMATDESCRIPTOR *ppfd)
 {
-	LOG(INFO) << "Redirecting wglSetPixelFormat" << '(' << "hdc = " << hdc << ", iPixelFormat = " << iPixelFormat << ", ppfd = " << ppfd << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglSetPixelFormat" << '(' << "hdc = " << hdc << ", iPixelFormat = " << iPixelFormat << ", ppfd = " << ppfd << ')' << " ...";
 
 	if (!reshade::hooks::call(wglSetPixelFormat)(hdc, iPixelFormat, ppfd))
 	{
-		LOG(WARN) << "wglSetPixelFormat failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglSetPixelFormat" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return FALSE;
 	}
 
@@ -299,7 +301,7 @@ HOOK_EXPORT int   WINAPI wglDescribePixelFormat(HDC hdc, int iPixelFormat, UINT 
 
 HOOK_EXPORT BOOL  WINAPI wglDescribeLayerPlane(HDC hdc, int iPixelFormat, int iLayerPlane, UINT nBytes, LPLAYERPLANEDESCRIPTOR plpd)
 {
-	LOG(INFO) << "Redirecting wglDescribeLayerPlane" << '(' << "hdc = " << hdc << ", iPixelFormat = " << iPixelFormat << ", iLayerPlane = " << iLayerPlane << ", nBytes = " << nBytes << ", plpd = " << plpd << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglDescribeLayerPlane" << '(' << "hdc = " << hdc << ", iPixelFormat = " << iPixelFormat << ", iLayerPlane = " << iLayerPlane << ", nBytes = " << nBytes << ", plpd = " << plpd << ')' << " ...";
 	LOG(WARN) << "Access to layer plane at index " << iLayerPlane << " is unsupported.";
 
 	SetLastError(ERROR_NOT_SUPPORTED);
@@ -307,7 +309,7 @@ HOOK_EXPORT BOOL  WINAPI wglDescribeLayerPlane(HDC hdc, int iPixelFormat, int iL
 }
 HOOK_EXPORT BOOL  WINAPI wglRealizeLayerPalette(HDC hdc, int iLayerPlane, BOOL b)
 {
-	LOG(INFO) << "Redirecting wglRealizeLayerPalette" << '(' << "hdc = " << hdc << ", iLayerPlane = " << iLayerPlane << ", b = " << (b ? "TRUE" : "FALSE") << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglRealizeLayerPalette" << '(' << "hdc = " << hdc << ", iLayerPlane = " << iLayerPlane << ", b = " << (b ? "TRUE" : "FALSE") << ')' << " ...";
 	LOG(WARN) << "Access to layer plane at index " << iLayerPlane << " is unsupported.";
 
 	SetLastError(ERROR_NOT_SUPPORTED);
@@ -315,7 +317,7 @@ HOOK_EXPORT BOOL  WINAPI wglRealizeLayerPalette(HDC hdc, int iLayerPlane, BOOL b
 }
 HOOK_EXPORT int   WINAPI wglGetLayerPaletteEntries(HDC hdc, int iLayerPlane, int iStart, int cEntries, COLORREF *pcr)
 {
-	LOG(INFO) << "Redirecting wglGetLayerPaletteEntries" << '(' << "hdc = " << hdc << ", iLayerPlane = " << iLayerPlane << ", iStart = " << iStart << ", cEntries = " << cEntries << ", pcr = " << pcr << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglGetLayerPaletteEntries" << '(' << "hdc = " << hdc << ", iLayerPlane = " << iLayerPlane << ", iStart = " << iStart << ", cEntries = " << cEntries << ", pcr = " << pcr << ')' << " ...";
 	LOG(WARN) << "Access to layer plane at index " << iLayerPlane << " is unsupported.";
 
 	SetLastError(ERROR_NOT_SUPPORTED);
@@ -323,7 +325,7 @@ HOOK_EXPORT int   WINAPI wglGetLayerPaletteEntries(HDC hdc, int iLayerPlane, int
 }
 HOOK_EXPORT int   WINAPI wglSetLayerPaletteEntries(HDC hdc, int iLayerPlane, int iStart, int cEntries, const COLORREF *pcr)
 {
-	LOG(INFO) << "Redirecting wglSetLayerPaletteEntries" << '(' << "hdc = " << hdc << ", iLayerPlane = " << iLayerPlane << ", iStart = " << iStart << ", cEntries = " << cEntries << ", pcr = " << pcr << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglSetLayerPaletteEntries" << '(' << "hdc = " << hdc << ", iLayerPlane = " << iLayerPlane << ", iStart = " << iStart << ", cEntries = " << cEntries << ", pcr = " << pcr << ')' << " ...";
 	LOG(WARN) << "Access to layer plane at index " << iLayerPlane << " is unsupported.";
 
 	SetLastError(ERROR_NOT_SUPPORTED);
@@ -332,14 +334,25 @@ HOOK_EXPORT int   WINAPI wglSetLayerPaletteEntries(HDC hdc, int iLayerPlane, int
 
 HOOK_EXPORT HGLRC WINAPI wglCreateContext(HDC hdc)
 {
-	LOG(INFO) << "Redirecting wglCreateContext" << '(' << "hdc = " << hdc << ')' << " ...";
-	LOG(INFO) << "> Passing on to wglCreateLayerContext ...";
+	LOG(INFO) << "Redirecting " << "wglCreateContext" << '(' << "hdc = " << hdc << ')' << " ...";
+	LOG(INFO) << "> Passing on to " << "wglCreateLayerContext" << ':';
 
-	return wglCreateLayerContext(hdc, 0);
+	const HGLRC hglrc = wglCreateLayerContext(hdc, 0);
+	if (hglrc == nullptr)
+	{
+		return nullptr;
+	}
+
+	// Keep track of legacy contexts here instead of in 'wglCreateLayerContext' because some drivers call the latter from within their 'wglCreateContextAttribsARB' implementation
+	{ const std::lock_guard<std::mutex> lock(s_mutex);
+		s_legacy_contexts.emplace(hglrc);
+	}
+
+	return hglrc;
 }
 			HGLRC WINAPI wglCreateContextAttribsARB(HDC hdc, HGLRC hShareContext, const int *piAttribList)
 {
-	LOG(INFO) << "Redirecting wglCreateContextAttribsARB" << '(' << "hdc = " << hdc << ", hShareContext = " << hShareContext << ", piAttribList = " << piAttribList << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglCreateContextAttribsARB" << '(' << "hdc = " << hdc << ", hShareContext = " << hShareContext << ", piAttribList = " << piAttribList << ')' << " ...";
 
 	struct attribute
 	{
@@ -361,7 +374,7 @@ HOOK_EXPORT HGLRC WINAPI wglCreateContext(HDC hdc)
 	};
 
 	int i = 0, major = 1, minor = 0, flags = 0;
-	bool core = true, compatibility = false;
+	bool compatibility = false;
 	attribute attribs[8] = {};
 
 	for (const int *attrib = piAttribList; attrib != nullptr && *attrib != 0 && i < 5; attrib += 2, ++i)
@@ -381,14 +394,13 @@ HOOK_EXPORT HGLRC WINAPI wglCreateContext(HDC hdc)
 			flags = attrib[1];
 			break;
 		case attribute::WGL_CONTEXT_PROFILE_MASK_ARB:
-			core = (attrib[1] & attribute::WGL_CONTEXT_CORE_PROFILE_BIT_ARB) != 0;
 			compatibility = (attrib[1] & attribute::WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB) != 0;
 			break;
 		}
 	}
 
-	if (major < 3 || minor < 2)
-		core = compatibility = false;
+	if (major < 3 || (major == 3 && minor < 2))
+		compatibility = true;
 
 #ifndef NDEBUG
 	flags |= attribute::WGL_CONTEXT_DEBUG_BIT_ARB;
@@ -400,12 +412,12 @@ HOOK_EXPORT HGLRC WINAPI wglCreateContext(HDC hdc)
 	attribs[i].name = attribute::WGL_CONTEXT_PROFILE_MASK_ARB;
 	attribs[i++].value = compatibility ? attribute::WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB : attribute::WGL_CONTEXT_CORE_PROFILE_BIT_ARB;
 
-	LOG(INFO) << "> Requesting " << (core ? "core " : compatibility ? "compatibility " : "") << "OpenGL context for version " << major << '.' << minor << " ...";
+	LOG(INFO) << "> Requesting " << (compatibility ? "compatibility" : "core") << " OpenGL context for version " << major << '.' << minor << " ...";
 
-	if (major < 4 || minor < 3)
+	if (major < 4 || (major == 4 && minor < 3))
 	{
 		LOG(INFO) << "> Replacing requested version with 4.3 ...";
-
+	
 		for (int k = 0; k < i; ++k)
 		{
 			switch (attribs[k].name)
@@ -426,7 +438,7 @@ HOOK_EXPORT HGLRC WINAPI wglCreateContext(HDC hdc)
 	const HGLRC hglrc = reshade::hooks::call(wglCreateContextAttribsARB)(hdc, hShareContext, reinterpret_cast<const int *>(attribs));
 	if (hglrc == nullptr)
 	{
-		LOG(WARN) << "wglCreateContextAttribsARB failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglCreateContextAttribsARB" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return nullptr;
 	}
 
@@ -452,7 +464,7 @@ HOOK_EXPORT HGLRC WINAPI wglCreateContext(HDC hdc)
 }
 HOOK_EXPORT HGLRC WINAPI wglCreateLayerContext(HDC hdc, int iLayerPlane)
 {
-	LOG(INFO) << "Redirecting wglCreateLayerContext" << '(' << "hdc = " << hdc << ", iLayerPlane = " << iLayerPlane << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglCreateLayerContext" << '(' << "hdc = " << hdc << ", iLayerPlane = " << iLayerPlane << ')' << " ...";
 
 	if (iLayerPlane != 0)
 	{
@@ -464,7 +476,7 @@ HOOK_EXPORT HGLRC WINAPI wglCreateLayerContext(HDC hdc, int iLayerPlane)
 	const HGLRC hglrc = reshade::hooks::call(wglCreateLayerContext)(hdc, iLayerPlane);
 	if (hglrc == nullptr)
 	{
-		LOG(WARN) << "wglCreateLayerContext failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglCreateLayerContext" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return nullptr;
 	}
 
@@ -483,7 +495,7 @@ HOOK_EXPORT BOOL  WINAPI wglCopyContext(HGLRC hglrcSrc, HGLRC hglrcDst, UINT mas
 }
 HOOK_EXPORT BOOL  WINAPI wglDeleteContext(HGLRC hglrc)
 {
-	LOG(INFO) << "Redirecting wglDeleteContext" << '(' << "hglrc = " << hglrc << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglDeleteContext" << '(' << "hglrc = " << hglrc << ')' << " ...";
 
 	if (const auto it = s_opengl_runtimes.find(hglrc);
 		it != s_opengl_runtimes.end())
@@ -492,31 +504,60 @@ HOOK_EXPORT BOOL  WINAPI wglDeleteContext(HGLRC hglrc)
 		LOG(DEBUG) << "> Cleaning up runtime " << it->second << " ...";
 #endif
 
-		// Choose a random device context to make current with (and hope that is still alive)
-		const HDC hdc = *it->second->_hdcs.begin(), prev_hdc = wglGetCurrentDC();
-		const HGLRC prev_hglrc = wglGetCurrentContext();
-
 		// Set the render context current so its resources can be cleaned up
-		if (hglrc == prev_hglrc || reshade::hooks::call(wglMakeCurrent)(hdc, hglrc))
+		const HGLRC prev_hglrc = wglGetCurrentContext();
+		if (hglrc == prev_hglrc)
 		{
 			it->second->on_reset();
 
 			delete it->second;
-
-			if (hglrc != prev_hglrc) // Reset to previous context if it was a different one
-				reshade::hooks::call(wglMakeCurrent)(prev_hdc, prev_hglrc);
-			if (it->second == g_current_runtime) // Ensure the runtime is not still current after deleting
-				g_current_runtime = nullptr;
 		}
 		else
 		{
-			LOG(WARN) << "Unable to make context current, leaking resources ...";
+			// Choose a device context to make current with
+			HDC hdc = *it->second->_hdcs.begin();
+			const HDC prev_hdc = wglGetCurrentDC();
+
+			// In case the original was destroyed already, create a dummy window to get a valid context
+			HWND dummy_window_handle = nullptr;
+			if (!WindowFromDC(hdc))
+			{
+				dummy_window_handle = CreateWindow(TEXT("Static"), nullptr, 0, 0, 0, 0, 0, nullptr, nullptr, nullptr, 0);
+				hdc = GetDC(dummy_window_handle);
+				PIXELFORMATDESCRIPTOR pfd = { sizeof(pfd), 1 };
+				pfd.dwFlags = PFD_DOUBLEBUFFER | PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL;
+				reshade::hooks::call(wglSetPixelFormat)(hdc,
+					reshade::hooks::call(wglChoosePixelFormat)(hdc, &pfd), &pfd);
+			}
+
+			if (reshade::hooks::call(wglMakeCurrent)(hdc, hglrc))
+			{
+				it->second->on_reset();
+
+				delete it->second;
+
+				// Restore previous device and render context
+				reshade::hooks::call(wglMakeCurrent)(prev_hdc, prev_hglrc);
+			}
+			else
+			{
+				LOG(WARN) << "Unable to make context current (error code " << (GetLastError() & 0xFFFF) << "), leaking resources ...";
+			}
+
+			if (dummy_window_handle != nullptr)
+				DestroyWindow(dummy_window_handle);
 		}
+
+		// Ensure the runtime is not still current after deleting
+		if (it->second == g_current_runtime)
+			g_current_runtime = nullptr;
 
 		s_opengl_runtimes.erase(it);
 	}
 
 	{ const std::lock_guard<std::mutex> lock(s_mutex);
+		s_legacy_contexts.erase(hglrc);
+
 		for (auto it = s_shared_contexts.begin(); it != s_shared_contexts.end();)
 		{
 			if (it->first == hglrc)
@@ -535,7 +576,7 @@ HOOK_EXPORT BOOL  WINAPI wglDeleteContext(HGLRC hglrc)
 
 	if (!reshade::hooks::call(wglDeleteContext)(hglrc))
 	{
-		LOG(WARN) << "wglDeleteContext failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglDeleteContext" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return FALSE;
 	}
 
@@ -544,11 +585,11 @@ HOOK_EXPORT BOOL  WINAPI wglDeleteContext(HGLRC hglrc)
 
 HOOK_EXPORT BOOL  WINAPI wglShareLists(HGLRC hglrc1, HGLRC hglrc2)
 {
-	LOG(INFO) << "Redirecting wglShareLists" << '(' << "hglrc1 = " << hglrc1 << ", hglrc2 = " << hglrc2 << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglShareLists" << '(' << "hglrc1 = " << hglrc1 << ", hglrc2 = " << hglrc2 << ')' << " ...";
 
 	if (!reshade::hooks::call(wglShareLists)(hglrc1, hglrc2))
 	{
-		LOG(WARN) << "wglShareLists failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglShareLists" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return FALSE;
 	}
 
@@ -564,7 +605,7 @@ HOOK_EXPORT BOOL  WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
 	static const auto trampoline = reshade::hooks::call(wglMakeCurrent);
 
 #if RESHADE_VERBOSE_LOG
-	LOG(DEBUG) << "Redirecting wglMakeCurrent" << '(' << "hdc = " << hdc << ", hglrc = " << hglrc << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglMakeCurrent" << '(' << "hdc = " << hdc << ", hglrc = " << hglrc << ')' << " ...";
 #endif
 
 	const HGLRC prev_hglrc = wglGetCurrentContext();
@@ -572,7 +613,7 @@ HOOK_EXPORT BOOL  WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
 	if (!trampoline(hdc, hglrc))
 	{
 #if RESHADE_VERBOSE_LOG
-		LOG(WARN) << "wglMakeCurrent failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglMakeCurrent" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 #endif
 		return FALSE;
 	}
@@ -625,7 +666,7 @@ HOOK_EXPORT BOOL  WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
 		{
 			g_current_runtime = nullptr;
 
-			LOG(WARN) << "Skipping render context " << hglrc << " because there is no window associated with its device context " << hdc << '.';
+			LOG(DEBUG) << "Skipping render context " << hglrc << " because there is no window associated with its device context " << hdc << '.';
 			return TRUE;
 		}
 		else if ((GetClassLongPtr(hwnd, GCL_STYLE) & CS_OWNDC) == 0)
@@ -645,8 +686,19 @@ HOOK_EXPORT BOOL  WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
 
 		if (gl3wIsSupported(4, 3))
 		{
+			// Get trampoline pointers to any hooked functions, so that runtime always calls into original OpenGL functions
+			if (s_hooks_installed)
+			{
+				gl3wProcs.gl.BindFramebuffer = reshade::hooks::call(glBindFramebuffer);
+			}
+
 			const auto runtime = new reshade::opengl::runtime_gl();
 			runtime->_hdcs.insert(hdc);
+
+			// Always set compatibility context flag on contexts that were created with 'wglCreateContext' instead of 'wglCreateContextAttribsARB'
+			// This is necessary because with some pixel formats the 'GL_ARB_compatibility' extension is not exposed even though the context was not created with the core profile
+			if (s_legacy_contexts.find(hglrc) != s_legacy_contexts.end())
+				runtime->_compatibility_context = true;
 
 			g_current_runtime = s_opengl_runtimes[hglrc] = runtime;
 
@@ -678,7 +730,7 @@ HOOK_EXPORT HGLRC WINAPI wglGetCurrentContext()
 
 	  HPBUFFERARB WINAPI wglCreatePbufferARB(HDC hdc, int iPixelFormat, int iWidth, int iHeight, const int *piAttribList)
 {
-	LOG(INFO) << "Redirecting wglCreatePbufferARB" << '(' << "hdc = " << hdc << ", iPixelFormat = " << iPixelFormat << ", iWidth = " << iWidth << ", iHeight = " << iHeight << ", piAttribList = " << piAttribList << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglCreatePbufferARB" << '(' << "hdc = " << hdc << ", iPixelFormat = " << iPixelFormat << ", iWidth = " << iWidth << ", iHeight = " << iHeight << ", piAttribList = " << piAttribList << ')' << " ...";
 
 	struct attribute
 	{
@@ -724,7 +776,7 @@ HOOK_EXPORT HGLRC WINAPI wglGetCurrentContext()
 	const HPBUFFERARB hpbuffer = reshade::hooks::call(wglCreatePbufferARB)(hdc, iPixelFormat, iWidth, iHeight, piAttribList);
 	if (hpbuffer == nullptr)
 	{
-		LOG(WARN) << "wglCreatePbufferARB failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglCreatePbufferARB" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return nullptr;
 	}
 
@@ -735,11 +787,11 @@ HOOK_EXPORT HGLRC WINAPI wglGetCurrentContext()
 }
 			BOOL  WINAPI wglDestroyPbufferARB(HPBUFFERARB hPbuffer)
 {
-	LOG(INFO) << "Redirecting wglDestroyPbufferARB" << '(' << "hPbuffer = " << hPbuffer << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglDestroyPbufferARB" << '(' << "hPbuffer = " << hPbuffer << ')' << " ...";
 
 	if (!reshade::hooks::call(wglDestroyPbufferARB)(hPbuffer))
 	{
-		LOG(WARN) << "wglDestroyPbufferARB failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglDestroyPbufferARB" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return FALSE;
 	}
 
@@ -751,12 +803,12 @@ HOOK_EXPORT HGLRC WINAPI wglGetCurrentContext()
 }
 			HDC   WINAPI wglGetPbufferDCARB(HPBUFFERARB hPbuffer)
 {
-	LOG(INFO) << "Redirecting wglGetPbufferDCARB" << '(' << "hPbuffer = " << hPbuffer << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglGetPbufferDCARB" << '(' << "hPbuffer = " << hPbuffer << ')' << " ...";
 
 	const HDC hdc = reshade::hooks::call(wglGetPbufferDCARB)(hPbuffer);
 	if (hdc == nullptr)
 	{
-		LOG(WARN) << "wglGetPbufferDCARB failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglGetPbufferDCARB" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return nullptr;
 	}
 
@@ -771,11 +823,11 @@ HOOK_EXPORT HGLRC WINAPI wglGetCurrentContext()
 }
 			int   WINAPI wglReleasePbufferDCARB(HPBUFFERARB hPbuffer, HDC hdc)
 {
-	LOG(INFO) << "Redirecting wglReleasePbufferDCARB" << '(' << "hPbuffer = " << hPbuffer << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "wglReleasePbufferDCARB" << '(' << "hPbuffer = " << hPbuffer << ')' << " ...";
 
 	if (!reshade::hooks::call(wglReleasePbufferDCARB)(hPbuffer, hdc))
 	{
-		LOG(WARN) << "wglReleasePbufferDCARB failed with error code " << (GetLastError() & 0xFFFF) << '!';
+		LOG(WARN) << "wglReleasePbufferDCARB" << " failed with error code " << (GetLastError() & 0xFFFF) << '!';
 		return FALSE;
 	}
 
@@ -817,8 +869,8 @@ HOOK_EXPORT BOOL  WINAPI wglSwapBuffers(HDC hdc)
 		RECT rect = { 0, 0, 0, 0 };
 		GetClientRect(hwnd, &rect);
 
-		const auto width = static_cast<unsigned int>(rect.right - rect.left);
-		const auto height = static_cast<unsigned int>(rect.bottom - rect.top);
+		const auto width = static_cast<unsigned int>(rect.right);
+		const auto height = static_cast<unsigned int>(rect.bottom);
 
 		if (width != runtime->frame_width() || height != runtime->frame_height())
 		{
@@ -842,8 +894,10 @@ HOOK_EXPORT BOOL  WINAPI wglSwapLayerBuffers(HDC hdc, UINT i)
 	{
 		const int index = i >= WGL_SWAP_UNDERLAY1 ? static_cast<int>(-std::log(i >> 16) / std::log(2) - 1) : static_cast<int>(std::log(i) / std::log(2));
 
-		LOG(INFO) << "Redirecting wglSwapLayerBuffers" << '(' << "hdc = " << hdc << ", i = " << i << ')' << " ...";
+#if RESHADE_VERBOSE_LOG
+		LOG(INFO) << "Redirecting " << "wglSwapLayerBuffers" << '(' << "hdc = " << hdc << ", i = " << i << ')' << " ...";
 		LOG(WARN) << "Access to layer plane at index " << index << " is unsupported.";
+#endif
 
 		SetLastError(ERROR_INVALID_PARAMETER);
 		return FALSE;
@@ -1013,61 +1067,51 @@ HOOK_EXPORT PROC  WINAPI wglGetProcAddress(LPCSTR lpszProc)
 		return reinterpret_cast<PROC>(glTexSubImage2D);
 	else if (0 == strcmp(lpszProc, "glViewport"))
 		return reinterpret_cast<PROC>(glViewport);
-	else if (static bool s_hooks_not_installed = true; s_hooks_not_installed)
+	else if (!s_hooks_installed)
 	{
+#define INSTALL_HOOK(name) \
+	reshade::hooks::install(#name, reinterpret_cast<reshade::hook::address>(trampoline(#name)), reinterpret_cast<reshade::hook::address>(name), true)
 		// Install all OpenGL hooks in a single batch job
-		reshade::hooks::install("glDeleteRenderbuffers", reinterpret_cast<reshade::hook::address>(trampoline("glDeleteRenderbuffers")), reinterpret_cast<reshade::hook::address>(glDeleteRenderbuffers), true);
-		reshade::hooks::install("glDrawArraysIndirect", reinterpret_cast<reshade::hook::address>(trampoline("glDrawArraysIndirect")), reinterpret_cast<reshade::hook::address>(glDrawArraysIndirect), true);
-		reshade::hooks::install("glDrawArraysInstanced", reinterpret_cast<reshade::hook::address>(trampoline("glDrawArraysInstanced")), reinterpret_cast<reshade::hook::address>(glDrawArraysInstanced), true);
-		reshade::hooks::install("glDrawArraysInstancedARB", reinterpret_cast<reshade::hook::address>(trampoline("glDrawArraysInstancedARB")), reinterpret_cast<reshade::hook::address>(glDrawArraysInstancedARB), true);
-		reshade::hooks::install("glDrawArraysInstancedEXT", reinterpret_cast<reshade::hook::address>(trampoline("glDrawArraysInstancedEXT")), reinterpret_cast<reshade::hook::address>(glDrawArraysInstancedEXT), true);
-		reshade::hooks::install("glDrawArraysInstancedBaseInstance", reinterpret_cast<reshade::hook::address>(trampoline("glDrawArraysInstancedBaseInstance")), reinterpret_cast<reshade::hook::address>(glDrawArraysInstancedBaseInstance), true);
-		reshade::hooks::install("glDrawElementsBaseVertex", reinterpret_cast<reshade::hook::address>(trampoline("glDrawElementsBaseVertex")), reinterpret_cast<reshade::hook::address>(glDrawElementsBaseVertex), true);
-		reshade::hooks::install("glDrawElementsIndirect", reinterpret_cast<reshade::hook::address>(trampoline("glDrawElementsIndirect")), reinterpret_cast<reshade::hook::address>(glDrawElementsIndirect), true);
-		reshade::hooks::install("glDrawElementsInstanced", reinterpret_cast<reshade::hook::address>(trampoline("glDrawElementsInstanced")), reinterpret_cast<reshade::hook::address>(glDrawElementsInstanced), true);
-		reshade::hooks::install("glDrawElementsInstancedARB", reinterpret_cast<reshade::hook::address>(trampoline("glDrawElementsInstancedARB")), reinterpret_cast<reshade::hook::address>(glDrawElementsInstancedARB), true);
-		reshade::hooks::install("glDrawElementsInstancedEXT", reinterpret_cast<reshade::hook::address>(trampoline("glDrawElementsInstancedEXT")), reinterpret_cast<reshade::hook::address>(glDrawElementsInstancedEXT), true);
-		reshade::hooks::install("glDrawElementsInstancedBaseVertex", reinterpret_cast<reshade::hook::address>(trampoline("glDrawElementsInstancedBaseVertex")), reinterpret_cast<reshade::hook::address>(glDrawElementsInstancedBaseVertex), true);
-		reshade::hooks::install("glDrawElementsInstancedBaseInstance", reinterpret_cast<reshade::hook::address>(trampoline("glDrawElementsInstancedBaseInstance")), reinterpret_cast<reshade::hook::address>(glDrawElementsInstancedBaseInstance), true);
-		reshade::hooks::install("glDrawElementsInstancedBaseVertexBaseInstance", reinterpret_cast<reshade::hook::address>(trampoline("glDrawElementsInstancedBaseVertexBaseInstance")), reinterpret_cast<reshade::hook::address>(glDrawElementsInstancedBaseVertexBaseInstance), true);
-		reshade::hooks::install("glDrawRangeElements", reinterpret_cast<reshade::hook::address>(trampoline("glDrawRangeElements")), reinterpret_cast<reshade::hook::address>(glDrawRangeElements), true);
-		reshade::hooks::install("glDrawRangeElementsBaseVertex", reinterpret_cast<reshade::hook::address>(trampoline("glDrawRangeElementsBaseVertex")), reinterpret_cast<reshade::hook::address>(glDrawRangeElementsBaseVertex), true);
-		reshade::hooks::install("glFramebufferRenderbuffer", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferRenderbuffer")), reinterpret_cast<reshade::hook::address>(glFramebufferRenderbuffer), true);
-		reshade::hooks::install("glFramebufferRenderbufferEXT", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferRenderbufferEXT")), reinterpret_cast<reshade::hook::address>(glFramebufferRenderbufferEXT), true);
-		reshade::hooks::install("glFramebufferTexture", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTexture")), reinterpret_cast<reshade::hook::address>(glFramebufferTexture), true);
-		reshade::hooks::install("glFramebufferTextureARB", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTextureARB")), reinterpret_cast<reshade::hook::address>(glFramebufferTextureARB), true);
-		reshade::hooks::install("glFramebufferTextureEXT", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTextureEXT")), reinterpret_cast<reshade::hook::address>(glFramebufferTextureEXT), true);
-		reshade::hooks::install("glFramebufferTexture1D", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTexture1D")), reinterpret_cast<reshade::hook::address>(glFramebufferTexture1D), true);
-		reshade::hooks::install("glFramebufferTexture1DEXT", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTexture1DEXT")), reinterpret_cast<reshade::hook::address>(glFramebufferTexture1DEXT), true);
-		reshade::hooks::install("glFramebufferTexture2D", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTexture2D")), reinterpret_cast<reshade::hook::address>(glFramebufferTexture2D), true);
-		reshade::hooks::install("glFramebufferTexture2DEXT", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTexture2DEXT")), reinterpret_cast<reshade::hook::address>(glFramebufferTexture2DEXT), true);
-		reshade::hooks::install("glFramebufferTexture3D", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTexture3D")), reinterpret_cast<reshade::hook::address>(glFramebufferTexture3D), true);
-		reshade::hooks::install("glFramebufferTexture3DEXT", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTexture3DEXT")), reinterpret_cast<reshade::hook::address>(glFramebufferTexture3DEXT), true);
-		reshade::hooks::install("glFramebufferTextureLayer", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTextureLayer")), reinterpret_cast<reshade::hook::address>(glFramebufferTextureLayer), true);
-		reshade::hooks::install("glFramebufferTextureLayerARB", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTextureLayerARB")), reinterpret_cast<reshade::hook::address>(glFramebufferTextureLayerARB), true);
-		reshade::hooks::install("glFramebufferTextureLayerEXT", reinterpret_cast<reshade::hook::address>(trampoline("glFramebufferTextureLayerEXT")), reinterpret_cast<reshade::hook::address>(glFramebufferTextureLayerEXT), true);
-		reshade::hooks::install("glMultiDrawArrays", reinterpret_cast<reshade::hook::address>(trampoline("glMultiDrawArrays")), reinterpret_cast<reshade::hook::address>(glMultiDrawArrays), true);
-		reshade::hooks::install("glMultiDrawArraysIndirect", reinterpret_cast<reshade::hook::address>(trampoline("glMultiDrawArraysIndirect")), reinterpret_cast<reshade::hook::address>(glMultiDrawArraysIndirect), true);
-		reshade::hooks::install("glMultiDrawElements", reinterpret_cast<reshade::hook::address>(trampoline("glMultiDrawElements")), reinterpret_cast<reshade::hook::address>(glMultiDrawElements), true);
-		reshade::hooks::install("glMultiDrawElementsBaseVertex", reinterpret_cast<reshade::hook::address>(trampoline("glMultiDrawElementsBaseVertex")), reinterpret_cast<reshade::hook::address>(glMultiDrawElementsBaseVertex), true);
-		reshade::hooks::install("glMultiDrawElementsIndirect", reinterpret_cast<reshade::hook::address>(trampoline("glMultiDrawElementsIndirect")), reinterpret_cast<reshade::hook::address>(glMultiDrawElementsIndirect), true);
-		reshade::hooks::install("glTexImage3D", reinterpret_cast<reshade::hook::address>(trampoline("glTexImage3D")), reinterpret_cast<reshade::hook::address>(glTexImage3D), true);
+		INSTALL_HOOK(glBindFramebuffer);
+		INSTALL_HOOK(glDrawArraysIndirect);
+		INSTALL_HOOK(glDrawArraysInstanced);
+		INSTALL_HOOK(glDrawArraysInstancedARB);
+		INSTALL_HOOK(glDrawArraysInstancedEXT);
+		INSTALL_HOOK(glDrawArraysInstancedBaseInstance);
+		INSTALL_HOOK(glDrawElementsBaseVertex);
+		INSTALL_HOOK(glDrawElementsIndirect);
+		INSTALL_HOOK(glDrawElementsInstanced);
+		INSTALL_HOOK(glDrawElementsInstancedARB);
+		INSTALL_HOOK(glDrawElementsInstancedEXT);
+		INSTALL_HOOK(glDrawElementsInstancedBaseVertex);
+		INSTALL_HOOK(glDrawElementsInstancedBaseInstance);
+		INSTALL_HOOK(glDrawElementsInstancedBaseVertexBaseInstance);
+		INSTALL_HOOK(glDrawRangeElements);
+		INSTALL_HOOK(glDrawRangeElementsBaseVertex);
+		INSTALL_HOOK(glMultiDrawArrays);
+		INSTALL_HOOK(glMultiDrawArraysIndirect);
+		INSTALL_HOOK(glMultiDrawElements);
+		INSTALL_HOOK(glMultiDrawElementsBaseVertex);
+		INSTALL_HOOK(glMultiDrawElementsIndirect);
+		INSTALL_HOOK(glTexImage3D);
 
-		reshade::hooks::install("wglChoosePixelFormatARB", reinterpret_cast<reshade::hook::address>(trampoline("wglChoosePixelFormatARB")), reinterpret_cast<reshade::hook::address>(wglChoosePixelFormatARB), true);
-		reshade::hooks::install("wglCreateContextAttribsARB", reinterpret_cast<reshade::hook::address>(trampoline("wglCreateContextAttribsARB")), reinterpret_cast<reshade::hook::address>(wglCreateContextAttribsARB), true);
-		reshade::hooks::install("wglCreatePbufferARB", reinterpret_cast<reshade::hook::address>(trampoline("wglCreatePbufferARB")), reinterpret_cast<reshade::hook::address>(wglCreatePbufferARB), true);
-		reshade::hooks::install("wglDestroyPbufferARB", reinterpret_cast<reshade::hook::address>(trampoline("wglDestroyPbufferARB")), reinterpret_cast<reshade::hook::address>(wglDestroyPbufferARB), true);
-		reshade::hooks::install("wglGetPbufferDCARB", reinterpret_cast<reshade::hook::address>(trampoline("wglGetPbufferDCARB")), reinterpret_cast<reshade::hook::address>(wglGetPbufferDCARB), true);
-		reshade::hooks::install("wglGetPixelFormatAttribivARB", reinterpret_cast<reshade::hook::address>(trampoline("wglGetPixelFormatAttribivARB")), reinterpret_cast<reshade::hook::address>(wglGetPixelFormatAttribivARB), true);
-		reshade::hooks::install("wglGetPixelFormatAttribfvARB", reinterpret_cast<reshade::hook::address>(trampoline("wglGetPixelFormatAttribfvARB")), reinterpret_cast<reshade::hook::address>(wglGetPixelFormatAttribfvARB), true);
-		reshade::hooks::install("wglQueryPbufferARB", reinterpret_cast<reshade::hook::address>(trampoline("wglQueryPbufferARB")), reinterpret_cast<reshade::hook::address>(wglQueryPbufferARB), true);
-		reshade::hooks::install("wglReleasePbufferDCARB", reinterpret_cast<reshade::hook::address>(trampoline("wglReleasePbufferDCARB")), reinterpret_cast<reshade::hook::address>(wglReleasePbufferDCARB), true);
-		reshade::hooks::install("wglGetSwapIntervalEXT", reinterpret_cast<reshade::hook::address>(trampoline("wglGetSwapIntervalEXT")), reinterpret_cast<reshade::hook::address>(wglGetSwapIntervalEXT), true);
-		reshade::hooks::install("wglSwapIntervalEXT", reinterpret_cast<reshade::hook::address>(trampoline("wglSwapIntervalEXT")), reinterpret_cast<reshade::hook::address>(wglSwapIntervalEXT), true);
+		INSTALL_HOOK(wglChoosePixelFormatARB);
+		INSTALL_HOOK(wglCreateContextAttribsARB);
+		INSTALL_HOOK(wglCreatePbufferARB);
+		INSTALL_HOOK(wglDestroyPbufferARB);
+		INSTALL_HOOK(wglGetPbufferDCARB);
+		INSTALL_HOOK(wglGetPixelFormatAttribivARB);
+		INSTALL_HOOK(wglGetPixelFormatAttribfvARB);
+		INSTALL_HOOK(wglQueryPbufferARB);
+		INSTALL_HOOK(wglReleasePbufferDCARB);
+		INSTALL_HOOK(wglGetSwapIntervalEXT);
+		INSTALL_HOOK(wglSwapIntervalEXT);
 
 		reshade::hook::apply_queued_actions();
 
-		s_hooks_not_installed = false;
+		gl3wProcs.gl.BindFramebuffer = reshade::hooks::call(glBindFramebuffer);
+
+		s_hooks_installed = false;
 	}
 
 	return address;

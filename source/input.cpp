@@ -3,8 +3,8 @@
  * License: https://github.com/crosire/reshade#license
  */
 
-#include "dll_log.hpp"
 #include "input.hpp"
+#include "dll_log.hpp"
 #include "hook_manager.hpp"
 #include <mutex>
 #include <cassert>
@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <Windows.h>
 
+extern HMODULE g_module_handle;
 static std::mutex s_windows_mutex;
 static std::unordered_map<HWND, unsigned int> s_raw_input_windows;
 static std::unordered_map<HWND, std::weak_ptr<reshade::input>> s_windows;
@@ -123,8 +124,10 @@ bool reshade::input::handle_window_message(const void *message_data)
 	if (input_window == s_windows.end())
 		return false;
 
-	RAWINPUT raw_data = {};
 	const std::shared_ptr<input> input = input_window->second.lock();
+	// It may happen that the input was destroyed between the removal of expired entries above and here, so need to abort in this case
+	if (input == nullptr)
+		return false;
 
 	// At this point we have a shared pointer to the input object and no longer reference any memory from the windows list, so can release the lock
 	lock.unlock();
@@ -141,6 +144,7 @@ bool reshade::input::handle_window_message(const void *message_data)
 	switch (details.message)
 	{
 	case WM_INPUT:
+		RAWINPUT raw_data;
 		if (UINT raw_data_size = sizeof(raw_data);
 			GET_RAWINPUT_CODE_WPARAM(details.wParam) != RIM_INPUT || // Ignore all input sink messages (when window is not focused)
 			GetRawInputData(reinterpret_cast<HRAWINPUT>(details.lParam), RID_INPUT, &raw_data, &raw_data_size, sizeof(raw_data.header)) == UINT(-1))
@@ -154,44 +158,52 @@ bool reshade::input::handle_window_message(const void *message_data)
 				break; // Input is already handled (since legacy mouse messages are enabled), so nothing to do here
 
 			if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN)
-				input->_mouse_buttons[0] = 0x88;
+				input->_keys[VK_LBUTTON] = 0x88;
 			else if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP)
-				input->_mouse_buttons[0] = 0x08;
+				input->_keys[VK_LBUTTON] = 0x08;
 			if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN)
-				input->_mouse_buttons[1] = 0x88;
+				input->_keys[VK_RBUTTON] = 0x88;
 			else if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_UP)
-				input->_mouse_buttons[1] = 0x08;
+				input->_keys[VK_RBUTTON] = 0x08;
 			if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN)
-				input->_mouse_buttons[2] = 0x88;
+				input->_keys[VK_MBUTTON] = 0x88;
 			else if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_UP)
-				input->_mouse_buttons[2] = 0x08;
+				input->_keys[VK_MBUTTON] = 0x08;
 
 			if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_BUTTON_4_DOWN)
-				input->_mouse_buttons[3] = 0x88;
+				input->_keys[VK_XBUTTON1] = 0x88;
 			else if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_BUTTON_4_UP)
-				input->_mouse_buttons[3] = 0x08;
+				input->_keys[VK_XBUTTON1] = 0x08;
 
 			if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_BUTTON_5_DOWN)
-				input->_mouse_buttons[4] = 0x88;
+				input->_keys[VK_XBUTTON2] = 0x88;
 			else if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_BUTTON_5_UP)
-				input->_mouse_buttons[4] = 0x08;
+				input->_keys[VK_XBUTTON2] = 0x08;
 
 			if (raw_data.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)
 				input->_mouse_wheel_delta += static_cast<short>(raw_data.data.mouse.usButtonData) / WHEEL_DELTA;
 			break;
 		case RIM_TYPEKEYBOARD:
+			if (raw_data.data.keyboard.VKey == 0)
+				break; // Ignore messages without a valid key code
+
 			is_keyboard_message = true;
+			// Do not block key up messages if the key down one was not blocked previously
+			if (input->_block_keyboard && (raw_data.data.keyboard.Flags & RI_KEY_BREAK) != 0 && raw_data.data.keyboard.VKey < 0xFF && (input->_keys[raw_data.data.keyboard.VKey] & 0x04) == 0)
+				is_keyboard_message = false;
 
 			if (raw_input_window == s_raw_input_windows.end() || (raw_input_window->second & 0x1) == 0)
 				break; // Input is already handled by 'WM_KEYDOWN' and friends (since legacy keyboard messages are enabled), so nothing to do here
 
-			if (raw_data.data.keyboard.VKey != 0xFF)
+			// Filter out prefix messages without a key code
+			if (raw_data.data.keyboard.VKey < 0xFF)
 				input->_keys[raw_data.data.keyboard.VKey] = (raw_data.data.keyboard.Flags & RI_KEY_BREAK) == 0 ? 0x88 : 0x08,
 				input->_keys_time[raw_data.data.keyboard.VKey] = details.time;
 
 			// No 'WM_CHAR' messages are sent if legacy keyboard messages are disabled, so need to generate text input manually here
-			// Cannot use the ToAscii function always as it seems to reset dead key state and thus calling it can break subsequent application input, should be fine here though since the application is already explicitly using raw input
-			if (WORD ch = 0; (raw_data.data.keyboard.Flags & RI_KEY_BREAK) == 0 && ToAscii(raw_data.data.keyboard.VKey, raw_data.data.keyboard.MakeCode, input->_keys, &ch, 0))
+			// Cannot use the ToUnicode function always as it seems to reset dead key state and thus calling it can break subsequent application input, should be fine here though since the application is already explicitly using raw input
+			// Since Windows 10 version 1607 this supports the 0x2 flag, which prevents the keyboard state from being changed, so it is not a problem there anymore either way
+			if (WCHAR ch[3] = {}; (raw_data.data.keyboard.Flags & RI_KEY_BREAK) == 0 && ToUnicode(raw_data.data.keyboard.VKey, raw_data.data.keyboard.MakeCode, input->_keys, ch, 2, 0x2))
 				input->_text_input += ch;
 			break;
 		}
@@ -201,44 +213,52 @@ bool reshade::input::handle_window_message(const void *message_data)
 		break;
 	case WM_KEYDOWN:
 	case WM_SYSKEYDOWN:
-		assert(details.wParam < ARRAYSIZE(input->_keys));
+		assert(details.wParam > 0 && details.wParam < ARRAYSIZE(input->_keys));
 		input->_keys[details.wParam] = 0x88;
 		input->_keys_time[details.wParam] = details.time;
+		if (input->_block_keyboard)
+			input->_keys[details.wParam] |= 0x04;
 		break;
 	case WM_KEYUP:
 	case WM_SYSKEYUP:
-		assert(details.wParam < ARRAYSIZE(input->_keys));
+		assert(details.wParam > 0 && details.wParam < ARRAYSIZE(input->_keys));
+		// Do not block key up messages if the key down one was not blocked previously (so key does not get stuck for the application)
+		if (input->_block_keyboard && (input->_keys[details.wParam] & 0x04) == 0)
+			is_keyboard_message = false;
 		input->_keys[details.wParam] = 0x08;
 		input->_keys_time[details.wParam] = details.time;
 		break;
 	case WM_LBUTTONDOWN:
-		input->_mouse_buttons[0] = 0x88;
+	case WM_LBUTTONDBLCLK: // Double clicking generates this sequence: WM_LBUTTONDOWN -> WM_LBUTTONUP -> WM_LBUTTONDBLCLK -> WM_LBUTTONUP, so handle it like a normal down
+		input->_keys[VK_LBUTTON] = 0x88;
 		break;
 	case WM_LBUTTONUP:
-		input->_mouse_buttons[0] = 0x08;
+		input->_keys[VK_LBUTTON] = 0x08;
 		break;
 	case WM_RBUTTONDOWN:
-		input->_mouse_buttons[1] = 0x88;
+	case WM_RBUTTONDBLCLK:
+		input->_keys[VK_RBUTTON] = 0x88;
 		break;
 	case WM_RBUTTONUP:
-		input->_mouse_buttons[1] = 0x08;
+		input->_keys[VK_RBUTTON] = 0x08;
 		break;
 	case WM_MBUTTONDOWN:
-		input->_mouse_buttons[2] = 0x88;
+	case WM_MBUTTONDBLCLK:
+		input->_keys[VK_MBUTTON] = 0x88;
 		break;
 	case WM_MBUTTONUP:
-		input->_mouse_buttons[2] = 0x08;
+		input->_keys[VK_MBUTTON] = 0x08;
 		break;
 	case WM_MOUSEWHEEL:
 		input->_mouse_wheel_delta += GET_WHEEL_DELTA_WPARAM(details.wParam) / WHEEL_DELTA;
 		break;
 	case WM_XBUTTONDOWN:
-		assert(2 + HIWORD(details.wParam) < ARRAYSIZE(input->_mouse_buttons));
-		input->_mouse_buttons[2 + HIWORD(details.wParam)] = 0x88;
+		assert(HIWORD(details.wParam) == XBUTTON1 || HIWORD(details.wParam) == XBUTTON2);
+		input->_keys[VK_XBUTTON1 + (HIWORD(details.wParam) - XBUTTON1)] = 0x88;
 		break;
 	case WM_XBUTTONUP:
-		assert(2 + HIWORD(details.wParam) < ARRAYSIZE(input->_mouse_buttons));
-		input->_mouse_buttons[2 + HIWORD(details.wParam)] = 0x08;
+		assert(HIWORD(details.wParam) == XBUTTON1 || HIWORD(details.wParam) == XBUTTON2);
+		input->_keys[VK_XBUTTON1 + (HIWORD(details.wParam) - XBUTTON1)] = 0x08;
 		break;
 	}
 
@@ -253,21 +273,26 @@ bool reshade::input::is_key_down(unsigned int keycode) const
 bool reshade::input::is_key_pressed(unsigned int keycode) const
 {
 	assert(keycode < ARRAYSIZE(_keys));
-	return keycode < ARRAYSIZE(_keys) && (_keys[keycode] & 0x88) == 0x88;
+	return keycode > 0 && keycode < ARRAYSIZE(_keys) && (_keys[keycode] & 0x88) == 0x88;
 }
-bool reshade::input::is_key_pressed(unsigned int keycode, bool ctrl, bool shift, bool alt) const
+bool reshade::input::is_key_pressed(unsigned int keycode, bool ctrl, bool shift, bool alt, bool force_modifiers) const
 {
-	return is_key_pressed(keycode) && ctrl == is_key_down(VK_CONTROL) && shift == is_key_down(VK_SHIFT) && alt == is_key_down(VK_MENU);
+	const bool key_down = is_key_pressed(keycode), ctrl_down = is_key_down(VK_CONTROL), shift_down = is_key_down(VK_SHIFT), alt_down = is_key_down(VK_MENU);
+	if (force_modifiers) // Modifier state is required to match
+		return key_down && (ctrl == ctrl_down && shift == shift_down && alt == alt_down);
+	else // Modifier state is optional and only has to match when down
+		return key_down && (!ctrl || ctrl_down) && (!shift || shift_down) && (!alt || alt_down);
 }
 bool reshade::input::is_key_released(unsigned int keycode) const
 {
 	assert(keycode < ARRAYSIZE(_keys));
-	return keycode < ARRAYSIZE(_keys) && (_keys[keycode] & 0x88) == 0x08;
+	return keycode > 0 && keycode < ARRAYSIZE(_keys) && (_keys[keycode] & 0x88) == 0x08;
 }
 
 bool reshade::input::is_any_key_down() const
 {
-	for (unsigned int i = 0; i < ARRAYSIZE(_keys); i++)
+	// Skip mouse buttons
+	for (unsigned int i = VK_XBUTTON2 + 1; i < ARRAYSIZE(_keys); i++)
 		if (is_key_down(i))
 			return true;
 	return false;
@@ -283,14 +308,14 @@ bool reshade::input::is_any_key_released() const
 
 unsigned int reshade::input::last_key_pressed() const
 {
-	for (unsigned int i = 0; i < ARRAYSIZE(_keys); i++)
+	for (unsigned int i = VK_XBUTTON2 + 1; i < ARRAYSIZE(_keys); i++)
 		if (is_key_pressed(i))
 			return i;
 	return 0;
 }
 unsigned int reshade::input::last_key_released() const
 {
-	for (unsigned int i = 0; i < ARRAYSIZE(_keys); i++)
+	for (unsigned int i = VK_XBUTTON2 + 1; i < ARRAYSIZE(_keys); i++)
 		if (is_key_released(i))
 			return i;
 	return 0;
@@ -298,53 +323,40 @@ unsigned int reshade::input::last_key_released() const
 
 bool reshade::input::is_mouse_button_down(unsigned int button) const
 {
-	assert(button < ARRAYSIZE(_mouse_buttons));
-	return button < ARRAYSIZE(_mouse_buttons) && (_mouse_buttons[button] & 0x80) == 0x80;
+	assert(button < 5);
+	return is_key_down(VK_LBUTTON + button + (button < 2 ? 0 : 1)); // VK_CANCEL is being ignored by runtime
 }
 bool reshade::input::is_mouse_button_pressed(unsigned int button) const
 {
-	assert(button < ARRAYSIZE(_mouse_buttons));
-	return button < ARRAYSIZE(_mouse_buttons) && (_mouse_buttons[button] & 0x88) == 0x88;
+	assert(button < 5);
+	return is_key_pressed(VK_LBUTTON + button + (button < 2 ? 0 : 1)); // VK_CANCEL is being ignored by runtime
 }
 bool reshade::input::is_mouse_button_released(unsigned int button) const
 {
-	assert(button < ARRAYSIZE(_mouse_buttons));
-	return button < ARRAYSIZE(_mouse_buttons) && (_mouse_buttons[button] & 0x88) == 0x08;
+	assert(button < 5);
+	return is_key_released(VK_LBUTTON + button + (button < 2 ? 0 : 1)); // VK_CANCEL is being ignored by runtime
 }
 
 bool reshade::input::is_any_mouse_button_down() const
 {
-	for (unsigned int i = 0; i < ARRAYSIZE(_mouse_buttons); i++)
+	for (unsigned int i = 0; i < 5; i++)
 		if (is_mouse_button_down(i))
 			return true;
 	return false;
 }
 bool reshade::input::is_any_mouse_button_pressed() const
 {
-	for (unsigned int i = 0; i < ARRAYSIZE(_mouse_buttons); i++)
+	for (unsigned int i = 0; i < 5; i++)
 		if (is_mouse_button_pressed(i))
 			return true;
 	return false;
 }
 bool reshade::input::is_any_mouse_button_released() const
 {
-	for (unsigned int i = 0; i < ARRAYSIZE(_mouse_buttons); i++)
+	for (unsigned int i = 0; i < 5; i++)
 		if (is_mouse_button_released(i))
 			return true;
 	return false;
-}
-
-void reshade::input::block_mouse_input(bool enable)
-{
-	_block_mouse = enable;
-
-	// Some applications clip the mouse cursor, so disable that while we want full control over mouse input
-	if (enable)
-		ClipCursor(nullptr);
-}
-void reshade::input::block_keyboard_input(bool enable)
-{
-	_block_keyboard = enable;
 }
 
 void reshade::input::next_frame()
@@ -352,17 +364,18 @@ void reshade::input::next_frame()
 	_frame_count++;
 
 	for (auto &state : _keys)
-		state &= ~0x8;
-	for (auto &state : _mouse_buttons)
-		state &= ~0x8;
+		state &= ~0x08;
 
-	// Reset any pressed down key states that have not been updated for more than 5 seconds
+	// Reset any pressed down key states (apart from mouse buttons) that have not been updated for more than 5 seconds
+	// Do not check mouse buttons here, since 'GetAsyncKeyState' always returns the state of the physical mouse buttons, not the logical ones in case they were remapped
+	// See https://docs.microsoft.com/windows/win32/api/winuser/nf-winuser-getasynckeystate
+	// And time is not tracked for mouse buttons anyway
 	const DWORD time = GetTickCount();
-	for (unsigned int i = 0; i < 256; ++i)
+	for (unsigned int i = 8; i < 256; ++i)
 		if ((_keys[i] & 0x80) != 0 &&
 			(time - _keys_time[i]) > 5000 &&
 			(GetAsyncKeyState(i) & 0x8000) == 0)
-			_keys[i] = 0x08;
+			(_keys[i] = 0x08);
 
 	_text_input.clear();
 	_mouse_wheel_delta = 0;
@@ -375,13 +388,13 @@ void reshade::input::next_frame()
 	// Update modifier key state
 	if ((_keys[VK_MENU] & 0x88) != 0 &&
 		(GetKeyState(VK_MENU) & 0x8000) == 0)
-		_keys[VK_MENU] = 0x08;
+		(_keys[VK_MENU] = 0x08);
 
 	// Update print screen state (there is no key down message, but the key up one is received via the message queue)
 	if ((_keys[VK_SNAPSHOT] & 0x80) == 0 &&
 		(GetAsyncKeyState(VK_SNAPSHOT) & 0x8000) != 0)
-		_keys[VK_SNAPSHOT] = 0x88,
-		_keys_time[VK_SNAPSHOT] = time;
+		(_keys[VK_SNAPSHOT] = 0x88),
+		(_keys_time[VK_SNAPSHOT] = time);
 }
 
 std::string reshade::input::key_name(unsigned int keycode)
@@ -390,7 +403,7 @@ std::string reshade::input::key_name(unsigned int keycode)
 		return std::string();
 
 	static const char *keyboard_keys_german[256] = {
-		"", "", "", "Cancel", "", "", "", "", "Backspace", "Tab", "", "", "Clear", "Enter", "", "",
+		"", "Left Mouse", "Right Mouse", "Cancel", "Middle Mouse", "X1 Mouse", "X2 Mouse", "", "Backspace", "Tab", "", "", "Clear", "Enter", "", "",
 		"Shift", "Control", "Alt", "Pause", "Caps Lock", "", "", "", "", "", "", "Escape", "", "", "", "",
 		"Leertaste", "Bild auf", "Bild ab", "Ende", "Pos 1", "Left Arrow", "Up Arrow", "Right Arrow", "Down Arrow", "Select", "", "", "Druck", "Einfg", "Entf", "Hilfe",
 		"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "", "", "", "", "", "",
@@ -408,7 +421,7 @@ std::string reshade::input::key_name(unsigned int keycode)
 		"", "", "", "", "", "", "Attn", "CrSel", "ExSel", "Erase EOF", "Play", "Zoom", "", "PA1", "OEM Clear", ""
 	};
 	static const char *keyboard_keys_international[256] = {
-		"", "", "", "Cancel", "", "", "", "", "Backspace", "Tab", "", "", "Clear", "Enter", "", "",
+		"", "Left Mouse", "Right Mouse", "Cancel", "Middle Mouse", "X1 Mouse", "X2 Mouse", "", "Backspace", "Tab", "", "", "Clear", "Enter", "", "",
 		"Shift", "Control", "Alt", "Pause", "Caps Lock", "", "", "", "", "", "", "Escape", "", "", "", "",
 		"Space", "Page Up", "Page Down", "End", "Home", "Left Arrow", "Up Arrow", "Right Arrow", "Down Arrow", "Select", "", "", "Print Screen", "Insert", "Delete", "Help",
 		"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "", "", "", "", "", "",
@@ -453,9 +466,18 @@ static inline bool is_blocking_keyboard_input()
 
 HOOK_EXPORT BOOL WINAPI HookGetMessageA(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax)
 {
+#if 1
+	// Implement 'GetMessage' with a timeout (see also DLL_PROCESS_DETACH in dllmain.cpp for more explanation)
+	while (!PeekMessageA(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, PM_REMOVE) && g_module_handle != nullptr)
+		MsgWaitForMultipleObjects(0, nullptr, FALSE, 1000, QS_ALLINPUT);
+
+	if (g_module_handle == nullptr)
+		std::memset(lpMsg, 0, sizeof(MSG)); // Clear message structure, so application does not process it
+#else
 	static const auto trampoline = reshade::hooks::call(HookGetMessageA);
-	if (!trampoline(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax))
-		return FALSE;
+	const BOOL result = trampoline(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax);
+	if (result < 0) // If there is an error, the return value is negative (https://docs.microsoft.com/windows/win32/api/winuser/nf-winuser-getmessage)
+		return result;
 
 	assert(lpMsg != nullptr);
 
@@ -467,14 +489,23 @@ HOOK_EXPORT BOOL WINAPI HookGetMessageA(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterM
 		// Change message so it is ignored by the recipient window
 		lpMsg->message = WM_NULL;
 	}
+#endif
 
-	return TRUE;
+	return lpMsg->message != WM_QUIT;
 }
 HOOK_EXPORT BOOL WINAPI HookGetMessageW(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax)
 {
+#if 1
+	while (!PeekMessageW(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, PM_REMOVE) && g_module_handle != nullptr)
+		MsgWaitForMultipleObjects(0, nullptr, FALSE, 1000, QS_ALLINPUT);
+
+	if (g_module_handle == nullptr)
+		std::memset(lpMsg, 0, sizeof(MSG));
+#else
 	static const auto trampoline = reshade::hooks::call(HookGetMessageW);
-	if (!trampoline(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax))
-		return FALSE;
+	const BOOL result = trampoline(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax);
+	if (result < 0)
+		return result;
 
 	assert(lpMsg != nullptr);
 
@@ -486,8 +517,9 @@ HOOK_EXPORT BOOL WINAPI HookGetMessageW(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterM
 		// Change message so it is ignored by the recipient window
 		lpMsg->message = WM_NULL;
 	}
+#endif
 
-	return TRUE;
+	return lpMsg->message != WM_QUIT;
 }
 HOOK_EXPORT BOOL WINAPI HookPeekMessageA(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax, UINT wRemoveMsg)
 {
@@ -549,7 +581,7 @@ HOOK_EXPORT BOOL WINAPI HookPostMessageW(HWND hWnd, UINT Msg, WPARAM wParam, LPA
 HOOK_EXPORT BOOL WINAPI HookRegisterRawInputDevices(PCRAWINPUTDEVICE pRawInputDevices, UINT uiNumDevices, UINT cbSize)
 {
 #if RESHADE_VERBOSE_LOG
-	LOG(DEBUG) << "Redirecting RegisterRawInputDevices" << '(' << "pRawInputDevices = " << pRawInputDevices << ", uiNumDevices = " << uiNumDevices << ", cbSize = " << cbSize << ')' << " ...";
+	LOG(DEBUG) << "Redirecting " << "RegisterRawInputDevices" << '(' << "pRawInputDevices = " << pRawInputDevices << ", uiNumDevices = " << uiNumDevices << ", cbSize = " << cbSize << ')' << " ...";
 #endif
 	for (UINT i = 0; i < uiNumDevices; ++i)
 	{
@@ -575,7 +607,7 @@ HOOK_EXPORT BOOL WINAPI HookRegisterRawInputDevices(PCRAWINPUTDEVICE pRawInputDe
 
 	if (!reshade::hooks::call(HookRegisterRawInputDevices)(pRawInputDevices, uiNumDevices, cbSize))
 	{
-		LOG(WARN) << "RegisterRawInputDevices failed with error code " << GetLastError() << '!';
+		LOG(WARN) << "RegisterRawInputDevices" << " failed with error code " << GetLastError() << '!';
 		return FALSE;
 	}
 
@@ -583,6 +615,16 @@ HOOK_EXPORT BOOL WINAPI HookRegisterRawInputDevices(PCRAWINPUTDEVICE pRawInputDe
 }
 
 static POINT last_cursor_position = {};
+
+HOOK_EXPORT BOOL WINAPI HookClipCursor(const RECT *lpRect)
+{
+	if (is_blocking_mouse_input())
+		// Some applications clip the mouse cursor, so disable that while we want full control over mouse input
+		lpRect = nullptr;
+
+	static const auto trampoline = reshade::hooks::call(HookClipCursor);
+	return trampoline(lpRect);
+}
 
 HOOK_EXPORT BOOL WINAPI HookSetCursorPosition(int X, int Y)
 {

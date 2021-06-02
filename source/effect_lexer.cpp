@@ -4,6 +4,7 @@
  */
 
 #include "effect_lexer.hpp"
+#include <cassert>
 #include <unordered_map> // Used for static lookup tables
 
 using namespace reshadefx;
@@ -116,6 +117,7 @@ static const std::unordered_map<tokenid, std::string> token_lookup = {
 	{ tokenid::uniform_, "uniform" },
 	{ tokenid::volatile_, "volatile" },
 	{ tokenid::precise, "precise" },
+	{ tokenid::groupshared, "groupshared" },
 	{ tokenid::in, "in" },
 	{ tokenid::out, "out" },
 	{ tokenid::inout, "inout" },
@@ -130,34 +132,71 @@ static const std::unordered_map<tokenid, std::string> token_lookup = {
 	{ tokenid::bool3, "bool3" },
 	{ tokenid::bool4, "bool4" },
 	{ tokenid::bool2x2, "bool2x2" },
+	{ tokenid::bool2x3, "bool2x3" },
+	{ tokenid::bool2x4, "bool2x4" },
+	{ tokenid::bool3x2, "bool3x2" },
 	{ tokenid::bool3x3, "bool3x3" },
+	{ tokenid::bool3x4, "bool3x4" },
+	{ tokenid::bool4x2, "bool4x2" },
+	{ tokenid::bool4x3, "bool4x3" },
 	{ tokenid::bool4x4, "bool4x4" },
 	{ tokenid::int_, "int" },
 	{ tokenid::int2, "int2" },
 	{ tokenid::int3, "int3" },
 	{ tokenid::int4, "int4" },
 	{ tokenid::int2x2, "int2x2" },
+	{ tokenid::int2x3, "int2x3" },
+	{ tokenid::int2x4, "int2x4" },
+	{ tokenid::int3x2, "int3x2" },
 	{ tokenid::int3x3, "int3x3" },
+	{ tokenid::int3x4, "int3x4" },
+	{ tokenid::int4x2, "int4x2" },
+	{ tokenid::int4x3, "int4x3" },
 	{ tokenid::int4x4, "int4x4" },
+	{ tokenid::min16int, "min16int" },
+	{ tokenid::min16int2, "min16int2" },
+	{ tokenid::min16int3, "min16int3" },
+	{ tokenid::min16int4, "min16int4" },
 	{ tokenid::uint_, "uint" },
 	{ tokenid::uint2, "uint2" },
 	{ tokenid::uint3, "uint3" },
 	{ tokenid::uint4, "uint4" },
 	{ tokenid::uint2x2, "uint2x2" },
+	{ tokenid::uint2x3, "uint2x3" },
+	{ tokenid::uint2x4, "uint2x4" },
+	{ tokenid::uint3x2, "uint3x2" },
 	{ tokenid::uint3x3, "uint3x3" },
+	{ tokenid::uint3x4, "uint3x4" },
+	{ tokenid::uint4x2, "uint4x2" },
+	{ tokenid::uint4x3, "uint4x3" },
 	{ tokenid::uint4x4, "uint4x4" },
+	{ tokenid::min16uint, "min16uint" },
+	{ tokenid::min16uint2, "min16uint2" },
+	{ tokenid::min16uint3, "min16uint3" },
+	{ tokenid::min16uint4, "min16uint4" },
 	{ tokenid::float_, "float" },
 	{ tokenid::float2, "float2" },
 	{ tokenid::float3, "float3" },
 	{ tokenid::float4, "float4" },
 	{ tokenid::float2x2, "float2x2" },
+	{ tokenid::float2x3, "float2x3" },
+	{ tokenid::float2x4, "float2x4" },
+	{ tokenid::float3x2, "float3x2" },
 	{ tokenid::float3x3, "float3x3" },
+	{ tokenid::float3x4, "float3x4" },
+	{ tokenid::float4x2, "float4x2" },
+	{ tokenid::float4x3, "float4x3" },
 	{ tokenid::float4x4, "float4x4" },
+	{ tokenid::min16float, "min16float" },
+	{ tokenid::min16float2, "min16float2" },
+	{ tokenid::min16float3, "min16float3" },
+	{ tokenid::min16float4, "min16float4" },
 	{ tokenid::vector, "vector" },
 	{ tokenid::matrix, "matrix" },
 	{ tokenid::string_, "string" },
 	{ tokenid::texture, "texture" },
 	{ tokenid::sampler, "sampler" },
+	{ tokenid::storage, "storage" },
 };
 static const std::unordered_map<std::string, tokenid> keyword_lookup = {
 	{ "asm", tokenid::reserved },
@@ -165,10 +204,19 @@ static const std::unordered_map<std::string, tokenid> keyword_lookup = {
 	{ "auto", tokenid::reserved },
 	{ "bool", tokenid::bool_ },
 	{ "bool2", tokenid::bool2 },
+	{ "bool2x1", tokenid::bool2 },
 	{ "bool2x2", tokenid::bool2x2 },
+	{ "bool2x3", tokenid::bool2x3 },
+	{ "bool2x4", tokenid::bool2x4 },
 	{ "bool3", tokenid::bool3 },
+	{ "bool3x1", tokenid::bool3 },
+	{ "bool3x2", tokenid::bool3x2 },
 	{ "bool3x3", tokenid::bool3x3 },
+	{ "bool3x4", tokenid::bool3x4 },
 	{ "bool4", tokenid::bool4 },
+	{ "bool4x1", tokenid::bool4 },
+	{ "bool4x2", tokenid::bool4x2 },
+	{ "bool4x3", tokenid::bool4x3 },
 	{ "bool4x4", tokenid::bool4x4 },
 	{ "break", tokenid::break_ },
 	{ "case", tokenid::case_ },
@@ -189,10 +237,19 @@ static const std::unordered_map<std::string, tokenid> keyword_lookup = {
 	{ "double", tokenid::reserved },
 	{ "dword", tokenid::uint_ },
 	{ "dword2", tokenid::uint2 },
+	{ "dword2x1", tokenid::uint2 },
 	{ "dword2x2", tokenid::uint2x2 },
+	{ "dword2x3", tokenid::uint2x3 },
+	{ "dword2x4", tokenid::uint2x4 },
 	{ "dword3", tokenid::uint3, },
+	{ "dword3x1", tokenid::uint3 },
+	{ "dword3x2", tokenid::uint3x2 },
 	{ "dword3x3", tokenid::uint3x3 },
+	{ "dword3x4", tokenid::uint3x4 },
 	{ "dword4", tokenid::uint4 },
+	{ "dword4x1", tokenid::uint4 },
+	{ "dword4x2", tokenid::uint4x2 },
+	{ "dword4x3", tokenid::uint4x3 },
 	{ "dword4x4", tokenid::uint4x4 },
 	{ "dynamic_cast", tokenid::reserved },
 	{ "else", tokenid::else_ },
@@ -204,23 +261,41 @@ static const std::unordered_map<std::string, tokenid> keyword_lookup = {
 	{ "FALSE", tokenid::false_literal },
 	{ "float", tokenid::float_ },
 	{ "float2", tokenid::float2 },
+	{ "float2x1", tokenid::float2 },
 	{ "float2x2", tokenid::float2x2 },
+	{ "float2x3", tokenid::float2x3 },
+	{ "float2x4", tokenid::float2x4 },
 	{ "float3", tokenid::float3 },
+	{ "float3x1", tokenid::float3 },
+	{ "float3x2", tokenid::float3x2 },
 	{ "float3x3", tokenid::float3x3 },
+	{ "float3x4", tokenid::float3x4 },
 	{ "float4", tokenid::float4 },
+	{ "float4x1", tokenid::float4 },
+	{ "float4x2", tokenid::float4x2 },
+	{ "float4x3", tokenid::float4x3 },
 	{ "float4x4", tokenid::float4x4 },
 	{ "for", tokenid::for_ },
 	{ "foreach", tokenid::reserved },
 	{ "friend", tokenid::reserved },
 	{ "globallycoherent", tokenid::reserved },
 	{ "goto", tokenid::reserved },
-	{ "groupshared", tokenid::reserved },
+	{ "groupshared", tokenid::groupshared },
 	{ "half", tokenid::reserved },
 	{ "half2", tokenid::reserved },
+	{ "half2x1", tokenid::reserved },
 	{ "half2x2", tokenid::reserved },
+	{ "half2x3", tokenid::reserved },
+	{ "half2x4", tokenid::reserved },
 	{ "half3", tokenid::reserved },
+	{ "half3x1", tokenid::reserved },
+	{ "half3x2", tokenid::reserved },
 	{ "half3x3", tokenid::reserved },
+	{ "half3x4", tokenid::reserved },
 	{ "half4", tokenid::reserved },
+	{ "half4x1", tokenid::reserved },
+	{ "half4x2", tokenid::reserved },
+	{ "half4x3", tokenid::reserved },
 	{ "half4x4", tokenid::reserved },
 	{ "if", tokenid::if_ },
 	{ "in", tokenid::in },
@@ -228,15 +303,36 @@ static const std::unordered_map<std::string, tokenid> keyword_lookup = {
 	{ "inout", tokenid::inout },
 	{ "int", tokenid::int_ },
 	{ "int2", tokenid::int2 },
+	{ "int2x1", tokenid::int2 },
 	{ "int2x2", tokenid::int2x2 },
+	{ "int2x3", tokenid::int2x3 },
+	{ "int2x4", tokenid::int2x4 },
 	{ "int3", tokenid::int3 },
+	{ "int3x1", tokenid::int3 },
+	{ "int3x2", tokenid::int3x2 },
 	{ "int3x3", tokenid::int3x3 },
+	{ "int3x4", tokenid::int3x4 },
 	{ "int4", tokenid::int4 },
+	{ "int4x1", tokenid::int4 },
+	{ "int4x2", tokenid::int4x2 },
+	{ "int4x3", tokenid::int4x3 },
 	{ "int4x4", tokenid::int4x4 },
 	{ "interface", tokenid::reserved },
 	{ "linear", tokenid::linear },
 	{ "long", tokenid::reserved },
 	{ "matrix", tokenid::matrix },
+	{ "min16float", tokenid::min16float },
+	{ "min16float2", tokenid::min16float2 },
+	{ "min16float3", tokenid::min16float3 },
+	{ "min16float4", tokenid::min16float4 },
+	{ "min16int", tokenid::min16int },
+	{ "min16int2", tokenid::min16int2 },
+	{ "min16int3", tokenid::min16int3 },
+	{ "min16int4", tokenid::min16int4 },
+	{ "min16uint", tokenid::min16uint },
+	{ "min16uint2", tokenid::min16uint2 },
+	{ "min16uint3", tokenid::min16uint3 },
+	{ "min16uint4", tokenid::min16uint4 },
 	{ "mutable", tokenid::reserved },
 	{ "namespace", tokenid::namespace_ },
 	{ "new", tokenid::reserved },
@@ -273,6 +369,10 @@ static const std::unordered_map<std::string, tokenid> keyword_lookup = {
 	{ "samplerCUBE", tokenid::reserved },
 	{ "samplerRECT", tokenid::reserved },
 	{ "SamplerState", tokenid::reserved },
+	{ "storage", tokenid::storage },
+	{ "storage1D", tokenid::storage },
+	{ "storage2D", tokenid::storage },
+	{ "storage3D", tokenid::storage },
 	{ "shared", tokenid::reserved },
 	{ "short", tokenid::reserved },
 	{ "signed", tokenid::reserved },
@@ -307,10 +407,19 @@ static const std::unordered_map<std::string, tokenid> keyword_lookup = {
 	{ "typedef", tokenid::reserved },
 	{ "uint", tokenid::uint_ },
 	{ "uint2", tokenid::uint2 },
+	{ "uint2x1", tokenid::uint2 },
 	{ "uint2x2", tokenid::uint2x2 },
+	{ "uint2x3", tokenid::uint2x3 },
+	{ "uint2x4", tokenid::uint2x4 },
 	{ "uint3", tokenid::uint3 },
+	{ "uint3x1", tokenid::uint3 },
+	{ "uint3x2", tokenid::uint3x2 },
 	{ "uint3x3", tokenid::uint3x3 },
+	{ "uint3x4", tokenid::uint3x4 },
 	{ "uint4", tokenid::uint4 },
+	{ "uint4x1", tokenid::uint4 },
+	{ "uint4x2", tokenid::uint4x2 },
+	{ "uint4x3", tokenid::uint4x3 },
 	{ "uint4x4", tokenid::uint4x4 },
 	{ "uniform", tokenid::uniform_ },
 	{ "union", tokenid::reserved },
@@ -401,7 +510,7 @@ reshadefx::token reshadefx::lexer::lex()
 next_token:
 	// Reset token data
 	tok.location = _cur_location;
-	tok.offset = _cur - _input.data();
+	tok.offset = input_offset();
 	tok.length = 1;
 	tok.literal_as_double = 0;
 	tok.literal_as_string.clear();
@@ -417,7 +526,7 @@ next_token:
 		if (_ignore_whitespace || is_at_line_begin || *_cur == '\n')
 			goto next_token;
 		tok.id = tokenid::space;
-		tok.length = _cur - _input.data() - tok.offset;
+		tok.length = input_offset() - tok.offset;
 		return tok;
 	case '\n':
 		_cur++;
@@ -531,7 +640,7 @@ next_token:
 			if (_ignore_comments)
 				goto next_token;
 			tok.id = tokenid::single_line_comment;
-			tok.length = _cur - _input.data() - tok.offset;
+			tok.length = input_offset() - tok.offset;
 			return tok;
 		}
 		else if (_cur[1] == '*')
@@ -553,7 +662,7 @@ next_token:
 			if (_ignore_comments)
 				goto next_token;
 			tok.id = tokenid::multi_line_comment;
-			tok.length = _cur - _input.data() - tok.offset;
+			tok.length = input_offset() - tok.offset;
 			return tok;
 		}
 		else if (_cur[1] == '=')
@@ -676,6 +785,12 @@ void reshadefx::lexer::skip_to_next_line()
 		skip(1);
 }
 
+void reshadefx::lexer::reset_to_offset(size_t offset)
+{
+	assert(offset < _input.size());
+	_cur = _input.data() + offset;
+}
+
 void reshadefx::lexer::parse_identifier(token &tok) const
 {
 	auto *const begin = _cur, *end = begin;
@@ -684,15 +799,15 @@ void reshadefx::lexer::parse_identifier(token &tok) const
 	do end++; while (type_lookup[uint8_t(*end)] == IDENT || type_lookup[uint8_t(*end)] == DIGIT);
 
 	tok.id = tokenid::identifier;
-	tok.offset = begin - _input.data();
+	tok.offset = input_offset();
 	tok.length = end - begin;
 	tok.literal_as_string.assign(begin, end);
 
 	if (_ignore_keywords)
 		return;
 
-	const auto it = keyword_lookup.find(tok.literal_as_string);
-	if (it != keyword_lookup.end())
+	if (const auto it = keyword_lookup.find(tok.literal_as_string);
+		it != keyword_lookup.end())
 		tok.id = it->second;
 }
 bool reshadefx::lexer::parse_pp_directive(token &tok)
@@ -701,8 +816,8 @@ bool reshadefx::lexer::parse_pp_directive(token &tok)
 	skip_space(); // Skip any space between the '#' and directive
 	parse_identifier(tok);
 
-	const auto it = pp_directive_lookup.find(tok.literal_as_string);
-	if (it != pp_directive_lookup.end())
+	if (const auto it = pp_directive_lookup.find(tok.literal_as_string);
+		it != pp_directive_lookup.end())
 	{
 		tok.id = it->second;
 		return true;
@@ -722,7 +837,7 @@ bool reshadefx::lexer::parse_pp_directive(token &tok)
 
 		skip_space();
 
-		// Check if this #line directive has an filename attached to it
+		// Check if this #line directive has an file name attached to it
 		if (_cur[0] == '"')
 		{
 			token temptok;
@@ -739,9 +854,9 @@ bool reshadefx::lexer::parse_pp_directive(token &tok)
 
 	return true;
 }
-void reshadefx::lexer::parse_string_literal(token &tok, bool escape) const
+void reshadefx::lexer::parse_string_literal(token &tok, bool escape)
 {
-	auto *const begin = _cur, *end = begin + 1;
+	auto *const begin = _cur, *end = begin + 1; // Skip first quote character right away
 
 	for (auto c = *end; c != '"'; c = *++end)
 	{
@@ -749,12 +864,22 @@ void reshadefx::lexer::parse_string_literal(token &tok, bool escape) const
 		{
 			// Line feed reached, the string literal is done (technically this should be an error, but the lexer does not report errors, so ignore it)
 			end--;
+			if (end[0] == '\r') end--;
 			break;
 		}
-		if (c == '\\' && end[1] == '\n')
+
+		if (c == '\r')
+		{
+			// Silently ignore carriage return characters
+			continue;
+		}
+
+		if (unsigned int n = (end[1] == '\r' && end + 2 < _end) ? 2 : 1;
+			c == '\\' && end[n] == '\n')
 		{
 			// Escape character found at end of line, the string literal continues on to the next line
-			end++;
+			end += n;
+			_cur_location.line++;
 			continue;
 		}
 

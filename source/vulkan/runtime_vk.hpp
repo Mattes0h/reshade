@@ -7,7 +7,7 @@
 
 #include "runtime.hpp"
 #include "vk_handle.hpp"
-#include "buffer_detection.hpp"
+#include "state_tracking.hpp"
 
 #pragma warning(push)
 #pragma warning(disable: 4100 4127 4324 4703) // Disable a bunch of warnings thrown by VMA code
@@ -22,17 +22,16 @@ namespace reshade::vulkan
 		static const uint32_t NUM_COMMAND_FRAMES = 5;
 
 	public:
-		runtime_vk(VkDevice device, VkPhysicalDevice physical_device, uint32_t queue_family_index, const VkLayerInstanceDispatchTable &instance_table, const VkLayerDispatchTable &device_table);
+		runtime_vk(VkDevice device, VkPhysicalDevice physical_device, uint32_t queue_family_index, const VkLayerInstanceDispatchTable &instance_table, const VkLayerDispatchTable &device_table, state_tracking_context *state_tracking);
 		~runtime_vk();
 
 		bool on_init(VkSwapchainKHR swapchain, const VkSwapchainCreateInfoKHR &desc, HWND hwnd);
 		void on_reset();
-		void on_present(uint32_t swapchain_image_index, const VkSemaphore *wait, uint32_t num_wait, VkSemaphore &signal);
+		void on_present(VkQueue queue, uint32_t swapchain_image_index, std::vector<VkSemaphore> &wait);
 
 		bool capture_screenshot(uint8_t *buffer) const override;
 
 		const VkLayerDispatchTable vk;
-		buffer_detection_context *_buffer_detection = nullptr;
 
 	private:
 		bool init_effect(size_t index) override;
@@ -42,7 +41,7 @@ namespace reshade::vulkan
 		bool init_texture(texture &texture) override;
 		void upload_texture(const texture &texture, const uint8_t *pixels) override;
 		void destroy_texture(texture &texture) override;
-		void generate_mipmaps(const texture &texture);
+		void generate_mipmaps(const struct tex_data *impl);
 
 		void render_technique(technique &technique) override;
 
@@ -56,9 +55,7 @@ namespace reshade::vulkan
 		VkBuffer create_buffer(VkDeviceSize size,
 			VkBufferUsageFlags usage, VmaMemoryUsage mem_usage,
 			VkBufferCreateFlags flags = 0, VmaAllocationCreateFlags mem_flags = 0, VmaAllocation *out_mem = nullptr);
-
 		VkImageView create_image_view(VkImage image, VkFormat format, uint32_t levels, VkImageAspectFlags aspect);
-		VkBufferView create_buffer_view(VkBuffer buffer, VkFormat format);
 
 		VmaAllocator _alloc = VK_NULL_HANDLE;
 		const VkDevice _device;
@@ -66,13 +63,15 @@ namespace reshade::vulkan
 		const uint32_t _queue_family_index;
 		VkPhysicalDeviceProperties _device_props = {};
 		VkPhysicalDeviceMemoryProperties _memory_props = {};
+		state_tracking_context &_state_tracking;
 
 		VkFence _cmd_fences[NUM_COMMAND_FRAMES + 1] = {};
-		VkSemaphore _cmd_semaphores[NUM_COMMAND_FRAMES] = {};
+		VkSemaphore _cmd_semaphores[NUM_COMMAND_FRAMES * 2] = {};
 		VkCommandPool _cmd_pool = VK_NULL_HANDLE;
 		mutable std::pair<VkCommandBuffer, bool> _cmd_buffers[NUM_COMMAND_FRAMES] = {};
 		uint32_t _cmd_index = 0;
 		uint32_t _swap_index = 0;
+		mutable bool _wait_for_idle_happened = false;
 
 		VkFormat _backbuffer_format = VK_FORMAT_UNDEFINED;
 		VkExtent2D _render_area = {};
@@ -90,7 +89,7 @@ namespace reshade::vulkan
 		VkImage _effect_stencil = VK_NULL_HANDLE;
 		VkFormat _effect_stencil_format = VK_FORMAT_UNDEFINED;
 		VkImageView _effect_stencil_view = VK_NULL_HANDLE;
-		std::vector<struct vulkan_effect_data> _effect_data;
+		std::vector<struct effect_data> _effect_data;
 		VkDescriptorPool _effect_descriptor_pool = VK_NULL_HANDLE;
 		VkDescriptorSetLayout _effect_descriptor_layout = VK_NULL_HANDLE;
 		std::unordered_map<size_t, VkSampler> _effect_sampler_states;
@@ -117,10 +116,9 @@ namespace reshade::vulkan
 #endif
 
 #if RESHADE_DEPTH
-		void draw_depth_debug_menu(buffer_detection_context &tracker);
-		void update_depth_image_bindings(buffer_detection::depthstencil_info info);
+		void draw_depth_debug_menu();
+		void update_depth_image_bindings(state_tracking::depthstencil_info info);
 
-		bool _use_aspect_ratio_heuristics = true;
 		VkImage _depth_image = VK_NULL_HANDLE;
 		VkImage _depth_image_override = VK_NULL_HANDLE;
 		VkImageView _depth_image_view = VK_NULL_HANDLE;

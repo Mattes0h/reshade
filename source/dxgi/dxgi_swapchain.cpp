@@ -15,6 +15,10 @@
 #include "d3d12/runtime_d3d12.hpp"
 #include <algorithm>
 
+extern UINT query_device(IUnknown *&device, com_ptr<IUnknown> &device_proxy);
+
+thread_local bool g_in_dxgi_runtime = false;
+
 DXGISwapChain::DXGISwapChain(D3D10Device *device, IDXGISwapChain  *original, const std::shared_ptr<reshade::runtime> &runtime) :
 	_orig(original),
 	_interface_version(0),
@@ -58,6 +62,8 @@ DXGISwapChain::DXGISwapChain(D3D12Device *device, IDXGISwapChain3 *original, con
 
 void DXGISwapChain::runtime_reset()
 {
+	const std::lock_guard<std::mutex> lock(_runtime_mutex);
+
 	switch (_direct3d_version)
 	{
 	case 10:
@@ -78,6 +84,8 @@ void DXGISwapChain::runtime_resize()
 	if (FAILED(_orig->GetDesc(&desc)))
 		return;
 
+	const std::lock_guard<std::mutex> lock(_runtime_mutex);
+
 	bool initialized = false;
 	switch (_direct3d_version)
 	{
@@ -97,27 +105,31 @@ void DXGISwapChain::runtime_resize()
 }
 void DXGISwapChain::runtime_present(UINT flags)
 {
-	// Some D3D11 games test presentation for timing and composition purposes.
-	// These calls are not rendering related, but rather a status request for the D3D runtime and as such should be ignored.
+	// Some D3D11 games test presentation for timing and composition purposes
+	// These calls are not rendering related, but rather a status request for the D3D runtime and as such should be ignored
 	if (flags & DXGI_PRESENT_TEST)
 		return;
+
+	// Synchronize access to runtime to avoid race conditions between 'load_effects' and 'unload_effects' causing crashes
+	// This is necessary because Resident Evil 3 calls DXGI functions simultaneously from multiple threads (which is technically illegal)
+	const std::lock_guard<std::mutex> lock(_runtime_mutex);
 
 	switch (_direct3d_version)
 	{
 	case 10: {
 		const auto device = static_cast<D3D10Device *>(_direct3d_device.get());
 		std::static_pointer_cast<reshade::d3d10::runtime_d3d10>(_runtime)->on_present();
-		device->_buffer_detection.reset(false);
+		device->_state.reset(false);
 		break; }
 	case 11: {
 		const auto device = static_cast<D3D11Device *>(_direct3d_device.get());
 		std::static_pointer_cast<reshade::d3d11::runtime_d3d11>(_runtime)->on_present();
-		device->_immediate_context->_buffer_detection.reset(false);
+		device->_immediate_context->_state.reset(false);
 		break; }
 	case 12: {
 		const auto device = static_cast<D3D12Device *>(_direct3d_device.get());
 		std::static_pointer_cast<reshade::d3d12::runtime_d3d12>(_runtime)->on_present();
-		device->_buffer_detection.reset(false);
+		device->_state.reset(false);
 		break; }
 	}
 }
@@ -224,15 +236,15 @@ ULONG   STDMETHODCALLTYPE DXGISwapChain::Release()
 	{
 	case 10:
 		std::static_pointer_cast<reshade::d3d10::runtime_d3d10>(_runtime)->on_reset();
-		static_cast<D3D10Device *>(_direct3d_device.get())->_buffer_detection.reset(true);
+		static_cast<D3D10Device *>(_direct3d_device.get())->_state.reset(true);
 		break; 
 	case 11:
 		std::static_pointer_cast<reshade::d3d11::runtime_d3d11>(_runtime)->on_reset();
-		static_cast<D3D11Device *>(_direct3d_device.get())->_immediate_context->_buffer_detection.reset(true);
+		static_cast<D3D11Device *>(_direct3d_device.get())->_immediate_context->_state.reset(true);
 		break;
 	case 12:
 		std::static_pointer_cast<reshade::d3d12::runtime_d3d12>(_runtime)->on_reset();
-		static_cast<D3D12Device *>(_direct3d_device.get())->_buffer_detection.reset(true); // Release any live references to depth buffers etc.
+		static_cast<D3D12Device *>(_direct3d_device.get())->_state.reset(true); // Release any live references to depth buffers etc.
 		break;
 	}
 
@@ -277,8 +289,12 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::GetDevice(REFIID riid, void **ppDevice)
 HRESULT STDMETHODCALLTYPE DXGISwapChain::Present(UINT SyncInterval, UINT Flags)
 {
 	runtime_present(Flags);
+	if (_force_vsync)
+		SyncInterval = 1;
 
+	g_in_dxgi_runtime = true;
 	const HRESULT hr = _orig->Present(SyncInterval, Flags);
+	g_in_dxgi_runtime = false;
 	handle_runtime_loss(hr);
 	return hr;
 }
@@ -288,7 +304,7 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::GetBuffer(UINT Buffer, REFIID riid, voi
 }
 HRESULT STDMETHODCALLTYPE DXGISwapChain::SetFullscreenState(BOOL Fullscreen, IDXGIOutput *pTarget)
 {
-	LOG(INFO) << "Redirecting IDXGISwapChain::SetFullscreenState" << '(' << "this = " << this << ", Fullscreen = " << (Fullscreen ? "TRUE" : "FALSE") << ", pTarget = " << pTarget << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "IDXGISwapChain::SetFullscreenState" << '(' << "this = " << this << ", Fullscreen = " << (Fullscreen ? "TRUE" : "FALSE") << ", pTarget = " << pTarget << ')' << " ...";
 
 	return _orig->SetFullscreenState(Fullscreen, pTarget);
 }
@@ -302,7 +318,7 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::GetDesc(DXGI_SWAP_CHAIN_DESC *pDesc)
 }
 HRESULT STDMETHODCALLTYPE DXGISwapChain::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags)
 {
-	LOG(INFO) << "Redirecting IDXGISwapChain::ResizeBuffers" << '('
+	LOG(INFO) << "Redirecting " << "IDXGISwapChain::ResizeBuffers" << '('
 		<<   "this = " << this
 		<< ", BufferCount = " << BufferCount
 		<< ", Width = " << Width
@@ -312,15 +328,21 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::ResizeBuffers(UINT BufferCount, UINT Wi
 		<< ')' << " ...";
 
 	runtime_reset();
+	if (_force_resolution[0] != 0 &&
+		_force_resolution[1] != 0)
+		Width = _force_resolution[0],
+		Height = _force_resolution[1];
+	if (_force_10_bit_format)
+		NewFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
 
 	const HRESULT hr = _orig->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
 	if (hr == DXGI_ERROR_INVALID_CALL) // Ignore invalid call errors since the device is still in a usable state afterwards
 	{
-		LOG(WARN) << "IDXGISwapChain::ResizeBuffers failed with error code DXGI_ERROR_INVALID_CALL!";
+		LOG(WARN) << "IDXGISwapChain::ResizeBuffers" << " failed with error code " << "DXGI_ERROR_INVALID_CALL" << '!';
 	}
 	else if (FAILED(hr))
 	{
-		LOG(ERROR) << "IDXGISwapChain::ResizeBuffers failed with error code " << hr << '!';
+		LOG(ERROR) << "IDXGISwapChain::ResizeBuffers" << " failed with error code " << hr << '!';
 		return hr;
 	}
 
@@ -368,9 +390,13 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::GetCoreWindow(REFIID refiid, void **ppU
 HRESULT STDMETHODCALLTYPE DXGISwapChain::Present1(UINT SyncInterval, UINT PresentFlags, const DXGI_PRESENT_PARAMETERS *pPresentParameters)
 {
 	runtime_present(PresentFlags);
+	if (_force_vsync)
+		SyncInterval = 1;
 
 	assert(_interface_version >= 1);
+	g_in_dxgi_runtime = true;
 	const HRESULT hr = static_cast<IDXGISwapChain1 *>(_orig)->Present1(SyncInterval, PresentFlags, pPresentParameters);
+	g_in_dxgi_runtime = false;
 	handle_runtime_loss(hr);
 	return hr;
 }
@@ -458,7 +484,7 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::SetColorSpace1(DXGI_COLOR_SPACE_TYPE Co
 }
 HRESULT STDMETHODCALLTYPE DXGISwapChain::ResizeBuffers1(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT Format, UINT SwapChainFlags, const UINT *pCreationNodeMask, IUnknown *const *ppPresentQueue)
 {
-	LOG(INFO) << "Redirecting IDXGISwapChain3::ResizeBuffers1" << '('
+	LOG(INFO) << "Redirecting " << "IDXGISwapChain3::ResizeBuffers1" << '('
 		<<   "this = " << this
 		<< ", BufferCount = " << BufferCount
 		<< ", Width = " << Width
@@ -470,16 +496,32 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::ResizeBuffers1(UINT BufferCount, UINT W
 		<< ')' << " ...";
 
 	runtime_reset();
+	if (_force_resolution[0] != 0 &&
+		_force_resolution[1] != 0)
+		Width = _force_resolution[0],
+		Height = _force_resolution[1];
+	if (_force_10_bit_format)
+		Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+
+	// Need to extract the original command queue object from the proxies passed in
+	assert(ppPresentQueue != nullptr);
+	std::vector<IUnknown *> present_queues(BufferCount);
+	for (UINT i = 0; i < BufferCount; ++i)
+	{
+		present_queues[i] = ppPresentQueue[i];
+		com_ptr<IUnknown> command_queue_proxy;
+		query_device(present_queues[i], command_queue_proxy);
+	}
 
 	assert(_interface_version >= 3);
-	const HRESULT hr = static_cast<IDXGISwapChain3 *>(_orig)->ResizeBuffers1(BufferCount, Width, Height, Format, SwapChainFlags, pCreationNodeMask, ppPresentQueue);
+	const HRESULT hr = static_cast<IDXGISwapChain3 *>(_orig)->ResizeBuffers1(BufferCount, Width, Height, Format, SwapChainFlags, pCreationNodeMask, present_queues.data());
 	if (hr == DXGI_ERROR_INVALID_CALL)
 	{
-		LOG(WARN) << "IDXGISwapChain3::ResizeBuffers1 failed with error code DXGI_ERROR_INVALID_CALL!";
+		LOG(WARN) << "IDXGISwapChain3::ResizeBuffers1" << " failed with error code " << "DXGI_ERROR_INVALID_CALL" << '!';
 	}
 	else if (FAILED(hr))
 	{
-		LOG(ERROR) << "IDXGISwapChain3::ResizeBuffers1 failed with error code " << hr << '!';
+		LOG(ERROR) << "IDXGISwapChain3::ResizeBuffers1" << " failed with error code " << hr << '!';
 		return hr;
 	}
 

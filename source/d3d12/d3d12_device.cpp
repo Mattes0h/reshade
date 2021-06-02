@@ -5,15 +5,16 @@
 
 #include "dll_log.hpp"
 #include "d3d12_device.hpp"
+#include "d3d12_device_downlevel.hpp"
 #include "d3d12_command_list.hpp"
 #include "d3d12_command_queue.hpp"
 
 D3D12Device::D3D12Device(ID3D12Device *original) :
 	_orig(original),
 	_interface_version(0),
-	_buffer_detection(original) {
+	_state(original) {
 	assert(_orig != nullptr);
-	_buffer_detection.init(_orig, nullptr, &_buffer_detection);
+	_state.init(_orig, nullptr, &_state);
 }
 
 bool D3D12Device::check_and_upgrade_interface(REFIID riid)
@@ -30,6 +31,7 @@ bool D3D12Device::check_and_upgrade_interface(REFIID riid)
 		__uuidof(ID3D12Device3),
 		__uuidof(ID3D12Device4),
 		__uuidof(ID3D12Device5),
+		__uuidof(ID3D12Device6),
 	};
 
 	for (unsigned int version = 0; version < ARRAYSIZE(iid_lookup); ++version)
@@ -68,6 +70,16 @@ HRESULT STDMETHODCALLTYPE D3D12Device::QueryInterface(REFIID riid, void **ppvObj
 		return S_OK;
 	}
 
+	// Special case for d3d12on7
+	if (riid == __uuidof(ID3D12DeviceDownlevel))
+	{
+		if (ID3D12DeviceDownlevel *downlevel = nullptr; // Not a 'com_ptr' since D3D12DeviceDownlevel will take ownership
+			_downlevel == nullptr && SUCCEEDED(_orig->QueryInterface(&downlevel)))
+			_downlevel = new D3D12DeviceDownlevel(this, downlevel);
+		if (_downlevel != nullptr)
+			return _downlevel->QueryInterface(riid, ppvObj);
+	}
+
 	return _orig->QueryInterface(riid, ppvObj);
 }
 ULONG   STDMETHODCALLTYPE D3D12Device::AddRef()
@@ -81,7 +93,10 @@ ULONG   STDMETHODCALLTYPE D3D12Device::Release()
 	if (ref != 0)
 		return _orig->Release(), ref;
 
-	_buffer_detection.reset(true);
+	_state.reset(true);
+
+	if (_downlevel != nullptr)
+		_downlevel->Release();
 
 	const ULONG ref_orig = _orig->Release();
 	if (ref_orig != 0) // Verify internal reference count
@@ -118,7 +133,7 @@ UINT    STDMETHODCALLTYPE D3D12Device::GetNodeCount()
 }
 HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommandQueue(const D3D12_COMMAND_QUEUE_DESC *pDesc, REFIID riid, void **ppCommandQueue)
 {
-	LOG(INFO) << "Redirecting ID3D12Device::CreateCommandQueue" << '(' << "this = " << this << ", pDesc = " << pDesc << ", riid = " << riid << ", ppCommandQueue = " << ppCommandQueue << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "ID3D12Device::CreateCommandQueue" << '(' << "this = " << this << ", pDesc = " << pDesc << ", riid = " << riid << ", ppCommandQueue = " << ppCommandQueue << ')' << " ...";
 
 	if (pDesc == nullptr || ppCommandQueue == nullptr)
 		return E_INVALIDARG;
@@ -136,7 +151,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommandQueue(const D3D12_COMMAND_QU
 	const HRESULT hr = _orig->CreateCommandQueue(pDesc, riid, ppCommandQueue);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D12Device::CreateCommandQueue failed with error code " << hr << '!';
+		LOG(WARN) << "ID3D12Device::CreateCommandQueue" << " failed with error code " << hr << '!';
 		return hr;
 	}
 
@@ -174,7 +189,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommandList(UINT nodeMask, D3D12_CO
 	const HRESULT hr = _orig->CreateCommandList(nodeMask, type, pCommandAllocator, pInitialState, riid, ppCommandList);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D12Device::CreateCommandList failed with error code " << hr << '!';
+		LOG(WARN) << "ID3D12Device::CreateCommandList" << " failed with error code " << hr << '!';
 		return hr;
 	}
 
@@ -183,7 +198,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommandList(UINT nodeMask, D3D12_CO
 	// Upgrade to the actual interface version requested here (and only hook graphics command lists)
 	if (command_list_proxy->check_and_upgrade_interface(riid))
 	{
-		command_list_proxy->_buffer_detection.init(_orig, command_list_proxy->_orig, &_buffer_detection);
+		command_list_proxy->_state.init(_orig, command_list_proxy->_orig, &_state);
 
 		*ppCommandList = command_list_proxy;
 	}
@@ -231,7 +246,7 @@ void    STDMETHODCALLTYPE D3D12Device::CreateDepthStencilView(ID3D12Resource *pR
 	_orig->CreateDepthStencilView(pResource, pDesc, DestDescriptor);
 #if RESHADE_DEPTH
 	if (pResource != nullptr)
-		_buffer_detection.on_create_dsv(pResource, DestDescriptor);
+		_state.on_create_dsv(pResource, DestDescriptor);
 #endif
 }
 void    STDMETHODCALLTYPE D3D12Device::CreateSampler(const D3D12_SAMPLER_DESC *pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor)
@@ -367,7 +382,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommandList1(UINT NodeMask, D3D12_C
 	const HRESULT hr = static_cast<ID3D12Device4 *>(_orig)->CreateCommandList1(NodeMask, Type, Flags, riid, ppCommandList);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D12Device4::CreateCommandList1 failed with error code " << hr << '!';
+		LOG(WARN) << "ID3D12Device4::CreateCommandList1" << " failed with error code " << hr << '!';
 		return hr;
 	}
 
@@ -376,7 +391,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreateCommandList1(UINT NodeMask, D3D12_C
 	// Upgrade to the actual interface version requested here (and only hook graphics command lists)
 	if (command_list_proxy->check_and_upgrade_interface(riid))
 	{
-		command_list_proxy->_buffer_detection.init(_orig, command_list_proxy->_orig, &_buffer_detection);
+		command_list_proxy->_state.init(_orig, command_list_proxy->_orig, &_state);
 
 		*ppCommandList = command_list_proxy;
 	}
@@ -453,4 +468,10 @@ D3D12_DRIVER_MATCHING_IDENTIFIER_STATUS STDMETHODCALLTYPE D3D12Device::CheckDriv
 {
 	assert(_interface_version >= 5);
 	return static_cast<ID3D12Device5 *>(_orig)->CheckDriverMatchingIdentifier(SerializedDataType, pIdentifierToCheck);
+}
+
+HRESULT STDMETHODCALLTYPE D3D12Device::SetBackgroundProcessingMode(D3D12_BACKGROUND_PROCESSING_MODE Mode, D3D12_MEASUREMENTS_ACTION MeasurementsAction, HANDLE hEventToSignalUponCompletion, BOOL *pbFurtherMeasurementsDesired)
+{
+	assert(_interface_version >= 6);
+	return static_cast<ID3D12Device6*>(_orig)->SetBackgroundProcessingMode(Mode, MeasurementsAction, hEventToSignalUponCompletion, pbFurtherMeasurementsDesired);
 }

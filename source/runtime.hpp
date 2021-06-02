@@ -19,6 +19,8 @@ struct ImDrawData;
 struct ImGuiContext;
 #endif
 
+extern volatile long g_network_traffic;
+
 namespace reshade
 {
 	class ini_file; // Forward declarations to avoid excessive #include
@@ -82,26 +84,31 @@ namespace reshade
 		/// <param name="variable">The variable to retrieve the value from.</param>
 		/// <param name="data">The buffer to store the value data in.</param>
 		/// <param name="size">The size of the <paramref name="data"/> buffer.</param>
-		void get_uniform_value(const uniform &variable, uint8_t *data, size_t size) const;
-		void get_uniform_value(const uniform &variable, bool *values, size_t count) const;
-		void get_uniform_value(const uniform &variable, int32_t *values, size_t count) const;
-		void get_uniform_value(const uniform &variable, uint32_t *values, size_t count) const;
-		void get_uniform_value(const uniform &variable, float *values, size_t count) const;
+		/// <param name="base_index">Array index to start reading from.</param>
+		void get_uniform_value(const uniform &variable, uint8_t *data, size_t size, size_t base_index) const;
+		void get_uniform_value(const uniform &variable, bool *values, size_t count, size_t array_index = 0) const;
+		void get_uniform_value(const uniform &variable, int32_t *values, size_t count, size_t array_index = 0) const;
+		void get_uniform_value(const uniform &variable, uint32_t *values, size_t count, size_t array_index = 0) const;
+		void get_uniform_value(const uniform &variable, float *values, size_t count, size_t array_index = 0) const;
 		/// <summary>
 		/// Update the value of a uniform variable.
 		/// </summary>
 		/// <param name="variable">The variable to update.</param>
 		/// <param name="data">The value data to update the variable to.</param>
 		/// <param name="size">The size of the <paramref name="data"/> buffer.</param>
-		void set_uniform_value(uniform &variable, const uint8_t *data, size_t size);
-		void set_uniform_value(uniform &variable, const bool *values, size_t count);
-		void set_uniform_value(uniform &variable, bool x, bool y = false, bool z = false, bool w = false) { const bool data[4] = { x, y, z, w }; set_uniform_value(variable, data, 4); }
-		void set_uniform_value(uniform &variable, const int32_t *values, size_t count);
-		void set_uniform_value(uniform &variable, int32_t  x, int32_t y = 0, int32_t z = 0, int32_t w = 0) { const int32_t data[4] = { x, y, z, w }; set_uniform_value(variable, data, 4); }
-		void set_uniform_value(uniform &variable, const uint32_t *values, size_t count);
-		void set_uniform_value(uniform &variable, uint32_t x, uint32_t y = 0u, uint32_t z = 0u, uint32_t w = 0u) { const uint32_t data[4] = { x, y, z, w }; set_uniform_value(variable, data, 4); }
-		void set_uniform_value(uniform &variable, const float *values, size_t count);
-		void set_uniform_value(uniform &variable, float x, float y = 0.0f, float z = 0.0f, float w = 0.0f) { const float data[4] = { x, y, z, w }; set_uniform_value(variable, data, 4); }
+		/// <param name="base_index">Array index to start writing to.</param>
+		void set_uniform_value(uniform &variable, const uint8_t *data, size_t size, size_t base_index);
+		void set_uniform_value(uniform &variable, const bool *values, size_t count, size_t array_index = 0);
+		void set_uniform_value(uniform &variable, const int32_t *values, size_t count, size_t array_index = 0);
+		void set_uniform_value(uniform &variable, const uint32_t *values, size_t count, size_t array_index = 0);
+		void set_uniform_value(uniform &variable, const float *values, size_t count, size_t array_index = 0);
+		template <typename T>
+		std::enable_if_t<std::is_same_v<T, bool> || std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t> || std::is_same_v<T, float>>
+		set_uniform_value(uniform &variable, T x, T y = T(0), T z = T(0), T w = T(0))
+		{
+			const T data[4] = { x, y, z, w };
+			set_uniform_value(variable, data, 4);
+		}
 
 		/// <summary>
 		/// Reset a uniform variable to its initial value.
@@ -115,7 +122,7 @@ namespace reshade
 		/// </summary>
 		/// <param name="label">Name of the widget.</param>
 		/// <param name="function">The callback function.</param>
-		void subscribe_to_ui(std::string label, std::function<void()> function) { _menu_callables.push_back({ label, function }); }
+		void subscribe_to_ui(std::string label, std::function<void()> function) { _menu_callables.emplace_back(label, function); }
 #endif
 		/// <summary>
 		/// Register a function to be called when user configuration is loaded.
@@ -149,27 +156,49 @@ namespace reshade
 		/// <summary>
 		/// Compile effect from the specified source file and initialize textures, uniforms and techniques.
 		/// </summary>
-		/// <param name="path">The path to an effect source code file.</param>
-		/// <param name="index">The ID of the effect.</param>
-		bool load_effect(const std::filesystem::path &path, size_t index);
+		/// <param name="source_file">The path to an effect source code file.</param>
+		/// <param name="preset">The preset to be used to fill specialization constants or check whether loading can be skipped.</param>
+		/// <param name="effect_index">The ID of the effect.</param>
+		bool load_effect(const std::filesystem::path &source_file, const reshade::ini_file &preset, size_t effect_index, bool preprocess_required = false);
 		/// <summary>
 		/// Load all effects found in the effect search paths.
 		/// </summary>
-		bool load_effects();
+		void load_effects();
 		/// <summary>
 		/// Initialize resources for the effect and load the effect module.
 		/// </summary>
-		/// <param name="index">The ID of the effect.</param>
-		virtual bool init_effect(size_t index) = 0;
+		/// <param name="effect_index">The ID of the effect.</param>
+		virtual bool init_effect(size_t effect_index) = 0;
 		/// <summary>
 		/// Unload the specified effect.
 		/// </summary>
-		/// <param name="index">The ID of the effect.</param>
-		virtual void unload_effect(size_t index);
+		/// <param name="effect_index">The ID of the effect.</param>
+		virtual void unload_effect(size_t effect_index);
 		/// <summary>
 		/// Unload all effects currently loaded.
 		/// </summary>
 		virtual void unload_effects();
+
+		/// <summary>
+		/// Reload only the specified effect.
+		/// </summary>
+		/// <param name="effect_index">The ID of the effect.</param>
+		bool reload_effect(size_t effect_index, bool preprocess_required = false);
+		/// <summary>
+		/// Unload all effects and then load them again.
+		/// </summary>
+		void reload_effects();
+
+		/// <summary>
+		/// Load compiled effect data from the disk cache.
+		/// </summary>
+		bool load_effect_cache(const std::filesystem::path &source_file, const size_t hash, std::string &source) const;
+		bool load_effect_cache(const std::filesystem::path &source_file, const std::string &entry_point, const size_t hash, std::vector<char> &cso, std::string &dasm) const;
+		/// <summary>
+		/// Save compiled effect data to the disk cache.
+		/// </summary>
+		bool save_effect_cache(const std::filesystem::path &source_file, const size_t hash, const std::string &source) const;
+		bool save_effect_cache(const std::filesystem::path &source_file, const std::string &entry_point, const size_t hash, const std::vector<char> &cso, const std::string &dasm) const;
 
 		/// <summary>
 		/// Load image files and update textures with image data.
@@ -193,7 +222,14 @@ namespace reshade
 		virtual void render_imgui_draw_data(ImDrawData *draw_data) = 0;
 #endif
 
+		/// <summary>
+		/// Returns the texture object corresponding to the passed <paramref name="unique_name"/>.
+		/// </summary>
+		/// <param name="unique_name">The name of the texture to find.</param>
+		texture &look_up_texture_by_name(const std::string &unique_name);
+
 		bool _is_initialized = false;
+		bool _performance_mode = false;
 		bool _has_high_network_activity = false;
 		bool _has_depth_texture = false;
 		unsigned int _width = 0;
@@ -257,7 +293,7 @@ namespace reshade
 		/// <param name="filter_path">Directory base to search in and/or an optional filter to skip preset files.</param>
 		/// <param name="reversed">Set to <c>true</c> to switch to previous instead of next preset.</param>
 		/// <returns><c>true</c> if there was another preset to switch to, <c>false</c> if not and therefore no changes were made.</returns>
-		bool switch_to_next_preset(const std::filesystem::path &filter_path, bool reversed = false);
+		bool switch_to_next_preset(std::filesystem::path filter_path, bool reversed = false);
 
 		/// <summary>
 		/// Create a copy of the current frame and write it to an image file on disk.
@@ -265,9 +301,9 @@ namespace reshade
 		void save_screenshot(const std::wstring &postfix = std::wstring(), bool should_save_preset = false);
 
 		// === Status ===
-		int _date[4] = {};
 		bool _effects_enabled = true;
 		bool _ignore_shortcuts = false;
+		bool _force_shortcut_modifiers = true;
 		unsigned int _effects_key_data[4];
 		std::shared_ptr<class input> _input;
 		std::chrono::high_resolution_clock::duration _last_frame_duration;
@@ -277,18 +313,20 @@ namespace reshade
 		// == Configuration ===
 		bool _needs_update = false;
 		unsigned long _latest_version[3] = {};
-		std::filesystem::path _configuration_path;
+		std::filesystem::path _config_path;
 		std::vector<std::function<void(ini_file &)>> _save_config_callables;
 		std::vector<std::function<void(const ini_file &)>> _load_config_callables;
 
 		// === Effect Loading ===
 		bool _no_debug_info = 0;
 		bool _no_reload_on_init = false;
-		bool _last_reload_successful = true;
+		bool _effect_load_skipping = false;
+		bool _load_option_disable_skipping = false;
+		std::atomic<int> _last_reload_successfull = true;
+		bool _last_texture_reload_successfull = true;
 		bool _textures_loaded = false;
-		bool _performance_mode = false;
 		unsigned int _reload_key_data[4];
-		size_t _reload_total_effects = 1;
+		unsigned int _performance_mode_key_data[4];
 		std::vector<size_t> _reload_compile_queue;
 		std::atomic<size_t> _reload_remaining_effects = 0;
 		std::mutex _reload_mutex;
@@ -297,6 +335,7 @@ namespace reshade
 		std::vector<std::string> _preset_preprocessor_definitions;
 		std::vector<std::filesystem::path> _effect_search_paths;
 		std::vector<std::filesystem::path> _texture_search_paths;
+		std::filesystem::path _intermediate_cache_path;
 		std::chrono::high_resolution_clock::time_point _last_reload_time;
 
 		// === Screenshots ===
@@ -305,11 +344,14 @@ namespace reshade
 		bool _screenshot_save_before = false;
 		bool _screenshot_save_success = true;
 		bool _screenshot_include_preset = false;
+		bool _screenshot_clear_alpha = true;
 		unsigned int _screenshot_format = 1;
+		unsigned int _screenshot_naming = 0;
 		unsigned int _screenshot_key_data[4];
 		std::filesystem::path _screenshot_path;
 		std::filesystem::path _last_screenshot_file;
 		std::chrono::high_resolution_clock::time_point _last_screenshot_time;
+		unsigned int _screenshot_jpeg_quality = 90;
 
 		// === Preset Switching ===
 		bool _preset_save_success = true;
@@ -321,38 +363,51 @@ namespace reshade
 		std::chrono::high_resolution_clock::time_point _last_preset_switching_time;
 
 #if RESHADE_GUI
-		void init_ui();
-		void deinit_ui();
+		struct editor_instance
+		{
+			size_t effect_index;
+			std::filesystem::path file_path;
+			std::string entry_point_name;
+			gui::code_editor editor;
+			bool selected = false;
+		};
+
+		void init_gui();
+		void deinit_gui();
 		void build_font_atlas();
 
-		void draw_ui();
-		void draw_ui_home();
-		void draw_ui_settings();
-		void draw_ui_statistics();
-		void draw_ui_log();
-		void draw_ui_about();
+		void load_custom_style();
+		void save_custom_style();
 
-		void draw_code_editor();
-		void draw_preset_explorer();
+		void draw_gui();
+		void draw_gui_home();
+		void draw_gui_settings();
+		void draw_gui_statistics();
+		void draw_gui_log();
+		void draw_gui_about();
+
 		void draw_variable_editor();
 		void draw_technique_editor();
 
-		void open_file_in_code_editor(size_t effect_index, const std::filesystem::path &path);
+		void open_code_editor(size_t effect_index, const std::string &entry_point);
+		void open_code_editor(size_t effect_index, const std::filesystem::path &path);
+		void open_code_editor(editor_instance &instance);
+		void draw_code_editor(editor_instance &instance);
 
 		// === User Interface ===
 		ImGuiContext *_imgui_context = nullptr;
 		std::unique_ptr<texture> _imgui_font_atlas;
 		std::vector<std::pair<std::string, std::function<void()>>> _menu_callables;
-		bool _show_menu = false;
-		bool _show_clock = false;
-		bool _show_fps = false;
-		bool _show_frametime = false;
 		bool _show_splash = true;
-		bool _show_code_editor = false;
+		bool _show_overlay = false;
+		bool _show_fps = false;
+		bool _show_clock = false;
+		bool _show_frametime = false;
 		bool _show_screenshot_message = true;
 		bool _no_font_scaling = false;
-		bool _rebuild_font_atlas = false;
-		unsigned int _menu_key_data[4];
+		bool _rebuild_font_atlas = true;
+		unsigned int _reload_count = 0;
+		unsigned int _overlay_key_data[4];
 		int _fps_pos = 1;
 		int _clock_format = 0;
 		int _input_processing_mode = 2;
@@ -360,15 +415,13 @@ namespace reshade
 		// === User Interface - Home ===
 		char _effect_filter[64] = {};
 		bool _variable_editor_tabs = false;
-		bool _browse_path_is_input_mode = false;
+		bool _duplicate_current_preset = false;
 		bool _was_preprocessor_popup_edited = false;
 		size_t _focused_effect = std::numeric_limits<size_t>::max();
-		size_t _selected_effect = std::numeric_limits<size_t>::max();
 		size_t _selected_technique = std::numeric_limits<size_t>::max();
 		unsigned int _tutorial_index = 0;
 		unsigned int _effects_expanded_state = 2;
-		float _variable_editor_height = 0.0f;
-		std::filesystem::path _current_browse_path;
+		float _variable_editor_height = 300.0f;
 
 		// === User Interface - Settings ===
 		int _font_size = 13;
@@ -380,6 +433,7 @@ namespace reshade
 		std::filesystem::path _file_selection_path;
 		float _fps_col[4] = { 1.0f, 1.0f, 0.784314f, 1.0f };
 		float _fps_scale = 1.0f;
+		bool _show_force_load_effects_button = true;
 
 		// === User Interface - Statistics ===
 		void *_preview_texture = nullptr;
@@ -387,10 +441,12 @@ namespace reshade
 
 		// === User Interface - Log ===
 		bool _log_wordwrap = false;
+		uintmax_t _last_log_size;
+		std::vector<std::string> _log_lines;
 
 		// === User Interface - Code Editor ===
-		imgui_code_editor _editor;
-		std::filesystem::path _editor_file;
+		std::vector<editor_instance> _editors;
+		std::array<uint32_t, gui::code_editor::color_palette_max> _editor_palette;
 #endif
 	};
 }

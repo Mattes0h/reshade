@@ -7,14 +7,14 @@
 
 #include "runtime.hpp"
 #include "state_block.hpp"
-#include "buffer_detection.hpp"
+#include "state_tracking.hpp"
 
 namespace reshade::d3d10
 {
 	class runtime_d3d10 : public runtime
 	{
 	public:
-		runtime_d3d10(ID3D10Device1 *device, IDXGISwapChain *swapchain);
+		runtime_d3d10(ID3D10Device1 *device, IDXGISwapChain *swapchain, state_tracking *state_tracking);
 		~runtime_d3d10();
 
 		bool on_init(const DXGI_SWAP_CHAIN_DESC &desc);
@@ -22,8 +22,6 @@ namespace reshade::d3d10
 		void on_present();
 
 		bool capture_screenshot(uint8_t *buffer) const override;
-
-		buffer_detection *_buffer_detection = nullptr;
 
 	private:
 		bool init_effect(size_t index) override;
@@ -37,6 +35,7 @@ namespace reshade::d3d10
 		void render_technique(technique &technique) override;
 
 		state_block _app_state;
+		state_tracking &_state_tracking;
 		const com_ptr<ID3D10Device1> _device;
 		const com_ptr<IDXGISwapChain> _swapchain;
 
@@ -55,7 +54,7 @@ namespace reshade::d3d10
 		com_ptr<ID3D10RasterizerState> _effect_rasterizer;
 		std::unordered_map<size_t, com_ptr<ID3D10SamplerState>> _effect_sampler_states;
 		com_ptr<ID3D10DepthStencilView> _effect_stencil;
-		std::vector<struct d3d10_effect_data> _effect_data;
+		std::vector<struct effect_data> _effect_data;
 
 #if RESHADE_GUI
 		bool init_imgui_resources();
@@ -80,15 +79,11 @@ namespace reshade::d3d10
 #endif
 
 #if RESHADE_DEPTH
-		void draw_depth_debug_menu(buffer_detection &tracker);
+		void draw_depth_debug_menu();
 		void update_depth_texture_bindings(com_ptr<ID3D10Texture2D> texture);
 
 		com_ptr<ID3D10Texture2D> _depth_texture;
 		com_ptr<ID3D10ShaderResourceView> _depth_texture_srv;
-
-		bool _filter_aspect_ratio = true;
-		bool _preserve_depth_buffers = false;
-		UINT _depth_clear_index_override = std::numeric_limits<UINT>::max();
 		ID3D10Texture2D *_depth_texture_override = nullptr;
 #endif
 	};

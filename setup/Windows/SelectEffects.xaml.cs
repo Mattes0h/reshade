@@ -6,21 +6,19 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 
-namespace ReShade.Setup
+namespace ReShade.Setup.Dialogs
 {
-	public class EffectPackage : INotifyPropertyChanged
+	public class EffectFile : INotifyPropertyChanged
 	{
 		public bool Enabled { get; set; }
-		public string PackageName { get; set; }
-		public string PackageDescription { get; set; }
-		public string InstallPath { get; set; }
-		public string TextureInstallPath { get; set; }
-		public string DownloadUrl { get; set; }
+		public string FileName { get; set; }
+		public string FilePath { get; set; }
 
 		public event PropertyChangedEventHandler PropertyChanged;
 		internal void NotifyPropertyChanged(string propertyName)
@@ -31,31 +29,51 @@ namespace ReShade.Setup
 
 	public partial class SelectEffectsDialog : Window
 	{
-		public SelectEffectsDialog(Utilities.IniFile packagesIni)
+		public SelectEffectsDialog(string packageName, IEnumerable<string> files)
 		{
 			InitializeComponent();
 			DataContext = this;
 
-			foreach (var package in packagesIni.GetSections())
+			// Remove any author description from display name
+			int authorIndex = packageName.IndexOf(" by ");
+			if (authorIndex != -1)
 			{
-				Packages.Add(new EffectPackage
+				packageName = packageName.Remove(authorIndex);
+			}
+
+			// Put package name in quotes in the tile, so repeating words do not look odd
+			PackageName.Text = '\"' + packageName + '\"';
+
+			var isAnyEnabled = false;
+			foreach (var path in files)
+			{
+				bool enabled = File.Exists(path);
+				isAnyEnabled = isAnyEnabled || enabled;
+
+				Items.Add(new EffectFile
 				{
-					Enabled = packagesIni.GetString(package, "Enabled") == "1",
-					PackageName = packagesIni.GetString(package, "PackageName"),
-					PackageDescription = packagesIni.GetString(package, "PackageDescription"),
-					InstallPath = packagesIni.GetString(package, "InstallPath"),
-					TextureInstallPath = packagesIni.GetString(package, "TextureInstallPath"),
-					DownloadUrl = packagesIni.GetString(package, "DownloadUrl")
+					Enabled = enabled,
+					FileName = Path.GetFileName(path),
+					FilePath = path
 				});
+			}
+
+			// Enable all items if none is enabled (which indicates that the package was not previously installed yet)
+			if (!isAnyEnabled)
+			{
+				foreach (var item in Items)
+				{
+					item.Enabled = true;
+				}
 			}
 		}
 
-		public IEnumerable<EffectPackage> EnabledPackages => Packages.Where(x => x.Enabled);
-		public ObservableCollection<EffectPackage> Packages { get; } = new ObservableCollection<EffectPackage>();
+		public IEnumerable<EffectFile> EnabledItems => Items.Where(x => x.Enabled);
+		public ObservableCollection<EffectFile> Items { get; } = new ObservableCollection<EffectFile>();
 
 		void OnCheck(object sender, RoutedEventArgs e)
 		{
-			if (Packages.Count == 0)
+			if (Items.Count == 0)
 			{
 				return;
 			}
@@ -68,17 +86,12 @@ namespace ReShade.Setup
 				bool check = button.Content as string == CHECK_LABEL;
 				button.Content = check ? UNCHECK_LABEL : CHECK_LABEL;
 
-				foreach (var package in Packages)
+				foreach (var item in Items)
 				{
-					package.Enabled = check;
-					package.NotifyPropertyChanged(nameof(package.Enabled));
+					item.Enabled = check;
+					item.NotifyPropertyChanged(nameof(item.Enabled));
 				}
 			}
-		}
-
-		void OnCancel(object sender, RoutedEventArgs e)
-		{
-			DialogResult = false;
 		}
 
 		void OnConfirm(object sender, RoutedEventArgs e)
@@ -93,7 +106,6 @@ namespace ReShade.Setup
 				checkbox.IsChecked = !checkbox.IsChecked;
 			}
 		}
-
 		void OnCheckBoxMouseCapture(object sender, MouseEventArgs e)
 		{
 			if (e.LeftButton == MouseButtonState.Pressed && sender is CheckBox checkbox)

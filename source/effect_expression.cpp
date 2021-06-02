@@ -14,8 +14,14 @@ reshadefx::type reshadefx::type::merge(const type &lhs, const type &rhs)
 {
 	type result = { std::max(lhs.base, rhs.base) };
 
+	// Non-numeric types cannot be vectors or matrices
+	if (!result.is_numeric())
+	{
+		result.rows = 0;
+		result.cols = 0;
+	}
 	// If one side of the expression is scalar, it needs to be promoted to the same dimension as the other side
-	if ((lhs.rows == 1 && lhs.cols == 1) || (rhs.rows == 1 && rhs.cols == 1))
+	else if ((lhs.rows == 1 && lhs.cols == 1) || (rhs.rows == 1 && rhs.cols == 1))
 	{
 		result.rows = std::max(lhs.rows, rhs.rows);
 		result.cols = std::max(lhs.cols, rhs.cols);
@@ -28,6 +34,11 @@ reshadefx::type reshadefx::type::merge(const type &lhs, const type &rhs)
 
 	// Some qualifiers propagate to the result
 	result.qualifiers = (lhs.qualifiers & type::q_precise) | (rhs.qualifiers & type::q_precise);
+
+	// In case this is a structure, assume they are the same
+	result.definition = rhs.definition;
+	assert(lhs.definition == rhs.definition || lhs.definition == 0);
+	assert(lhs.array_length == 0 && rhs.array_length == 0);
 
 	return result;
 }
@@ -43,11 +54,20 @@ std::string reshadefx::type::description() const
 	case reshadefx::type::t_bool:
 		result = "bool";
 		break;
+	case reshadefx::type::t_min16int:
+		result = "min16int";
+		break;
 	case reshadefx::type::t_int:
 		result = "int";
 		break;
+	case reshadefx::type::t_min16uint:
+		result = "min16uint";
+		break;
 	case reshadefx::type::t_uint:
 		result = "uint";
+		break;
+	case reshadefx::type::t_min16float:
+		result = "min16float";
 		break;
 	case reshadefx::type::t_float:
 		result = "float";
@@ -60,6 +80,9 @@ std::string reshadefx::type::description() const
 		break;
 	case reshadefx::type::t_sampler:
 		result = "sampler";
+		break;
+	case reshadefx::type::t_storage:
+		result = "storage";
 		break;
 	case reshadefx::type::t_texture:
 		result = "texture";
@@ -93,6 +116,13 @@ void reshadefx::expression::reset_to_lvalue(const reshadefx::location &loc, uint
 	is_lvalue = true;
 	is_constant = false;
 	chain.clear();
+
+	// Make sure uniform l-values cannot be assigned to by making them constant
+	if (in_type.has(type::q_uniform))
+		type.qualifiers |= type::q_const;
+
+	// Strip away global variable qualifiers
+	type.qualifiers &= ~(reshadefx::type::q_extern | reshadefx::type::q_static | reshadefx::type::q_uniform | reshadefx::type::q_groupshared);
 }
 void reshadefx::expression::reset_to_rvalue(const reshadefx::location &loc, uint32_t in_base, const reshadefx::type &in_type)
 {
@@ -103,6 +133,9 @@ void reshadefx::expression::reset_to_rvalue(const reshadefx::location &loc, uint
 	is_lvalue = false;
 	is_constant = false;
 	chain.clear();
+
+	// Strip away global variable qualifiers
+	type.qualifiers &= ~(reshadefx::type::q_extern | reshadefx::type::q_static | reshadefx::type::q_uniform | reshadefx::type::q_groupshared);
 }
 
 void reshadefx::expression::reset_to_rvalue_constant(const reshadefx::location &loc, bool data)
@@ -213,6 +246,7 @@ void reshadefx::expression::add_cast_operation(const reshadefx::type &cast_type)
 	}
 
 	type = cast_type;
+	type.qualifiers |= type::q_const; // Casting always makes expression not modifiable
 }
 void reshadefx::expression::add_member_access(unsigned int index, const reshadefx::type &in_type)
 {
@@ -226,7 +260,8 @@ void reshadefx::expression::add_member_access(unsigned int index, const reshadef
 }
 void reshadefx::expression::add_dynamic_index_access(uint32_t index_expression)
 {
-	assert(type.is_numeric() && !is_constant);
+	assert(!is_constant); // Cannot have dynamic indexing into constant in SPIR-V
+	assert(type.is_array() || (type.is_numeric() && !type.is_scalar()));
 
 	auto prev_type = type;
 
@@ -248,7 +283,7 @@ void reshadefx::expression::add_dynamic_index_access(uint32_t index_expression)
 }
 void reshadefx::expression::add_constant_index_access(unsigned int index)
 {
-	assert(type.is_numeric() && !type.is_scalar());
+	assert(type.is_array() || (type.is_numeric() && !type.is_scalar()));
 
 	auto prev_type = type;
 

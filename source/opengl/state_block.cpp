@@ -14,7 +14,7 @@ reshade::opengl::state_block::state_block()
 	memset(this, 0, sizeof(*this));
 }
 
-void reshade::opengl::state_block::capture()
+void reshade::opengl::state_block::capture(bool compatibility)
 {
 #ifndef NDEBUG
 	has_state = true;
@@ -27,6 +27,7 @@ void reshade::opengl::state_block::capture()
 	glGetIntegerv(GL_CURRENT_PROGRAM, &_program);
 	glGetIntegerv(GL_UNIFORM_BUFFER_BINDING, &_ubo);
 
+	// Technically should capture image bindings here as well ...
 	glGetIntegerv(GL_ACTIVE_TEXTURE, &_active_texture);
 	for (GLuint i = 0; i < 32; i++)
 	{
@@ -43,6 +44,8 @@ void reshade::opengl::state_block::capture()
 	glGetIntegerv(GL_BLEND_DST, &_blend_dest);
 	glGetIntegerv(GL_BLEND_EQUATION_RGB, &_blend_eq_color);
 	glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &_blend_eq_alpha);
+	if (compatibility)
+		_alpha_test = glIsEnabled(GL_ALPHA_TEST);
 	_depth_test = glIsEnabled(GL_DEPTH_TEST);
 	glGetBooleanv(GL_DEPTH_WRITEMASK, &_depth_mask);
 	glGetIntegerv(GL_DEPTH_FUNC, &_depth_func);
@@ -77,7 +80,7 @@ void reshade::opengl::state_block::capture()
 		glGetIntegerv(GL_CLIP_DEPTH_MODE, &clip_depthmode);
 	}
 }
-void reshade::opengl::state_block::apply() const
+void reshade::opengl::state_block::apply(bool compatibility) const
 {
 #ifndef NDEBUG
 	has_state = false;
@@ -104,6 +107,8 @@ void reshade::opengl::state_block::apply() const
 	glEnableb(GL_BLEND, _blend);
 	glBlendFunc(_blend_src, _blend_dest);
 	glBlendEquationSeparate(_blend_eq_color, _blend_eq_alpha);
+	if (compatibility)
+		glEnableb(GL_ALPHA_TEST, _alpha_test);
 	glEnableb(GL_DEPTH_TEST, _depth_test);
 	glDepthMask(_depth_mask);
 	glDepthFunc(_depth_func);

@@ -15,7 +15,7 @@ D3D11Device::D3D11Device(IDXGIDevice1 *dxgi_device, ID3D11Device *original, ID3D
 	_dxgi_device(new DXGIDevice(dxgi_device, this)),
 	_immediate_context(new D3D11DeviceContext(this, immediate_context)) {
 	assert(_orig != nullptr);
-	_immediate_context->_buffer_detection.init(immediate_context, &_immediate_context->_buffer_detection);
+	_immediate_context->_state.init(immediate_context, &_immediate_context->_state);
 }
 
 bool D3D11Device::check_and_upgrade_interface(REFIID riid)
@@ -70,7 +70,7 @@ HRESULT STDMETHODCALLTYPE D3D11Device::QueryInterface(REFIID riid, void **ppvObj
 	}
 
 	// Note: Objects must have an identity, so use DXGIDevice for IID_IUnknown
-	// See https://docs.microsoft.com/en-us/windows/desktop/com/rules-for-implementing-queryinterface
+	// See https://docs.microsoft.com/windows/desktop/com/rules-for-implementing-queryinterface
 	if (_dxgi_device->check_and_upgrade_interface(riid))
 	{
 		_dxgi_device->AddRef();
@@ -128,7 +128,8 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateTexture2D(const D3D11_TEXTURE2D_DES
 	// Add D3D11_BIND_SHADER_RESOURCE flag to all depth-stencil textures so that we can access them in post-processing shaders
 	D3D11_TEXTURE2D_DESC new_desc = *pDesc;
 	if (new_desc.SampleDesc.Count == 1 && // Skip MSAA textures
-		0 != (new_desc.BindFlags & D3D11_BIND_DEPTH_STENCIL))
+		0 != (new_desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) &&
+		0 == (new_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE))
 	{
 		new_desc.Format = make_dxgi_format_typeless(new_desc.Format);
 		new_desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
@@ -137,7 +138,23 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateTexture2D(const D3D11_TEXTURE2D_DES
 	const HRESULT hr = _orig->CreateTexture2D(&new_desc, pInitialData, ppTexture2D);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D11Device::CreateTexture2D failed with error code " << hr << '.';
+		LOG(WARN) << "ID3D11Device::CreateTexture2D" << " failed with error code " << hr << '.';
+#if RESHADE_VERBOSE_LOG
+		LOG(DEBUG) << "> Dumping description:";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+		LOG(DEBUG) << "  | Width                                   | " << std::setw(39) << new_desc.Width << " |";
+		LOG(DEBUG) << "  | Height                                  | " << std::setw(39) << new_desc.Height << " |";
+		LOG(DEBUG) << "  | MipLevels                               | " << std::setw(39) << new_desc.MipLevels << " |";
+		LOG(DEBUG) << "  | ArraySize                               | " << std::setw(39) << new_desc.ArraySize << " |";
+		LOG(DEBUG) << "  | Format                                  | " << std::setw(39) << new_desc.Format << " |";
+		LOG(DEBUG) << "  | SampleCount                             | " << std::setw(39) << new_desc.SampleDesc.Count << " |";
+		LOG(DEBUG) << "  | SampleQuality                           | " << std::setw(39) << new_desc.SampleDesc.Quality << " |";
+		LOG(DEBUG) << "  | Usage                                   | " << std::setw(39) << new_desc.Usage << " |";
+		LOG(DEBUG) << "  | BindFlags                               | " << std::setw(39) << std::hex << new_desc.BindFlags << std::dec << " |";
+		LOG(DEBUG) << "  | CPUAccessFlags                          | " << std::setw(39) << std::hex << new_desc.CPUAccessFlags << std::dec << " |";
+		LOG(DEBUG) << "  | MiscFlags                               | " << std::setw(39) << std::hex << new_desc.MiscFlags << std::dec << " |";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+#endif
 	}
 
 	return hr;
@@ -148,10 +165,13 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateTexture3D(const D3D11_TEXTURE3D_DES
 }
 HRESULT STDMETHODCALLTYPE D3D11Device::CreateShaderResourceView(ID3D11Resource *pResource, const D3D11_SHADER_RESOURCE_VIEW_DESC *pDesc, ID3D11ShaderResourceView **ppSRView)
 {
-	D3D11_SHADER_RESOURCE_VIEW_DESC new_desc =
-		pDesc != nullptr ? *pDesc : D3D11_SHADER_RESOURCE_VIEW_DESC {};
+	if (pResource == nullptr)
+		return E_INVALIDARG;
 
-	// A view cannot be created with a typeless format (which was set 'CreateTexture2D'), so fix it
+	D3D11_SHADER_RESOURCE_VIEW_DESC new_desc =
+		pDesc != nullptr ? *pDesc : D3D11_SHADER_RESOURCE_VIEW_DESC { DXGI_FORMAT_UNKNOWN };
+
+	// A view cannot be created with a typeless format (which was set in 'CreateTexture2D'), so fix it
 	if (pDesc == nullptr || pDesc->Format == DXGI_FORMAT_UNKNOWN)
 	{
 		D3D11_TEXTURE2D_DESC texture_desc;
@@ -160,7 +180,7 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateShaderResourceView(ID3D11Resource *
 		{
 			texture->GetDesc(&texture_desc);
 
-			// Only textures with the depth-stencil bind flag where modified, so skip all others
+			// Only non-MSAA textures with the depth-stencil bind flag where modified, so skip all others
 			if (texture_desc.SampleDesc.Count == 1 &&
 				0 != (texture_desc.BindFlags & D3D11_BIND_DEPTH_STENCIL))
 			{
@@ -183,7 +203,14 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateShaderResourceView(ID3D11Resource *
 	const HRESULT hr = _orig->CreateShaderResourceView(pResource, pDesc, ppSRView);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D11Device::CreateShaderResourceView failed with error code " << hr << '.';
+		LOG(WARN) << "ID3D11Device::CreateShaderResourceView" << " failed with error code " << hr << '.';
+#if RESHADE_VERBOSE_LOG
+		LOG(DEBUG) << "> Dumping description:";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+		LOG(DEBUG) << "  | Format                                  | " << std::setw(39) << new_desc.Format << " |";
+		LOG(DEBUG) << "  | ViewDimension                           | " << std::setw(39) << new_desc.ViewDimension << " |";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+#endif
 	}
 
 	return hr;
@@ -198,8 +225,11 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateRenderTargetView(ID3D11Resource *pR
 }
 HRESULT STDMETHODCALLTYPE D3D11Device::CreateDepthStencilView(ID3D11Resource *pResource, const D3D11_DEPTH_STENCIL_VIEW_DESC *pDesc, ID3D11DepthStencilView **ppDepthStencilView)
 {
+	if (pResource == nullptr)
+		return E_INVALIDARG;
+
 	D3D11_DEPTH_STENCIL_VIEW_DESC new_desc =
-		pDesc != nullptr ? *pDesc : D3D11_DEPTH_STENCIL_VIEW_DESC {};
+		pDesc != nullptr ? *pDesc : D3D11_DEPTH_STENCIL_VIEW_DESC { DXGI_FORMAT_UNKNOWN };
 
 	// A view cannot be created with a typeless format (which was set in 'CreateTexture2D'), so fix it
 	if (pDesc == nullptr || pDesc->Format == DXGI_FORMAT_UNKNOWN)
@@ -233,7 +263,14 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateDepthStencilView(ID3D11Resource *pR
 	const HRESULT hr = _orig->CreateDepthStencilView(pResource, pDesc, ppDepthStencilView);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D11Device::CreateDepthStencilView failed with error code " << hr << '.';
+		LOG(WARN) << "ID3D11Device::CreateDepthStencilView" << " failed with error code " << hr << '.';
+#if RESHADE_VERBOSE_LOG
+		LOG(DEBUG) << "> Dumping description:";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+		LOG(DEBUG) << "  | Format                                  | " << std::setw(39) << new_desc.Format << " |";
+		LOG(DEBUG) << "  | ViewDimension                           | " << std::setw(39) << new_desc.ViewDimension << " |";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+#endif
 	}
 
 	return hr;
@@ -304,7 +341,7 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateCounter(const D3D11_COUNTER_DESC *p
 }
 HRESULT STDMETHODCALLTYPE D3D11Device::CreateDeferredContext(UINT ContextFlags, ID3D11DeviceContext **ppDeferredContext)
 {
-	LOG(INFO) << "Redirecting ID3D11Device::CreateDeferredContext" << '(' << "this = " << this << ", ContextFlags = " << ContextFlags << ", ppDeferredContext = " << ppDeferredContext << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "ID3D11Device::CreateDeferredContext" << '(' << "this = " << this << ", ContextFlags = " << ContextFlags << ", ppDeferredContext = " << ppDeferredContext << ')' << " ...";
 
 	if (ppDeferredContext == nullptr)
 		return E_INVALIDARG;
@@ -312,12 +349,12 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateDeferredContext(UINT ContextFlags, 
 	const HRESULT hr = _orig->CreateDeferredContext(ContextFlags, ppDeferredContext);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D11Device::CreateDeferredContext failed with error code " << hr << '!';
+		LOG(WARN) << "ID3D11Device::CreateDeferredContext" << " failed with error code " << hr << '!';
 		return hr;
 	}
 
 	const auto device_context_proxy = new D3D11DeviceContext(this, *ppDeferredContext);
-	device_context_proxy->_buffer_detection.init(*ppDeferredContext, &_immediate_context->_buffer_detection);
+	device_context_proxy->_state.init(*ppDeferredContext, &_immediate_context->_state);
 
 	*ppDeferredContext = device_context_proxy;
 
@@ -403,7 +440,7 @@ void    STDMETHODCALLTYPE D3D11Device::GetImmediateContext1(ID3D11DeviceContext1
 }
 HRESULT STDMETHODCALLTYPE D3D11Device::CreateDeferredContext1(UINT ContextFlags, ID3D11DeviceContext1 **ppDeferredContext)
 {
-	LOG(INFO) << "Redirecting ID3D11Device1::CreateDeferredContext1" << '(' << "this = " << this << ", ContextFlags = " << ContextFlags << ", ppDeferredContext = " << ppDeferredContext << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "ID3D11Device1::CreateDeferredContext1" << '(' << "this = " << this << ", ContextFlags = " << ContextFlags << ", ppDeferredContext = " << ppDeferredContext << ')' << " ...";
 
 	if (ppDeferredContext == nullptr)
 		return E_INVALIDARG;
@@ -413,12 +450,12 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateDeferredContext1(UINT ContextFlags,
 	const HRESULT hr = static_cast<ID3D11Device1 *>(_orig)->CreateDeferredContext1(ContextFlags, ppDeferredContext);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D11Device1::CreateDeferredContext1 failed with error code " << hr << '!';
+		LOG(WARN) << "ID3D11Device1::CreateDeferredContext1" << " failed with error code " << hr << '!';
 		return hr;
 	}
 
 	const auto device_context_proxy = new D3D11DeviceContext(this, *ppDeferredContext);
-	device_context_proxy->_buffer_detection.init(*ppDeferredContext, &_immediate_context->_buffer_detection);
+	device_context_proxy->_state.init(*ppDeferredContext, &_immediate_context->_state);
 
 	*ppDeferredContext = device_context_proxy;
 
@@ -466,7 +503,7 @@ void    STDMETHODCALLTYPE D3D11Device::GetImmediateContext2(ID3D11DeviceContext2
 }
 HRESULT STDMETHODCALLTYPE D3D11Device::CreateDeferredContext2(UINT ContextFlags, ID3D11DeviceContext2 **ppDeferredContext)
 {
-	LOG(INFO) << "Redirecting ID3D11Device2::CreateDeferredContext2" << '(' << "this = " << this << ", ContextFlags = " << ContextFlags << ", ppDeferredContext = " << ppDeferredContext << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "ID3D11Device2::CreateDeferredContext2" << '(' << "this = " << this << ", ContextFlags = " << ContextFlags << ", ppDeferredContext = " << ppDeferredContext << ')' << " ...";
 
 	if (ppDeferredContext == nullptr)
 		return E_INVALIDARG;
@@ -476,12 +513,12 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateDeferredContext2(UINT ContextFlags,
 	const HRESULT hr = static_cast<ID3D11Device2 *>(_orig)->CreateDeferredContext2(ContextFlags, ppDeferredContext);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D11Device1::CreateDeferredContext2 failed with error code " << hr << '!';
+		LOG(WARN) << "ID3D11Device1::CreateDeferredContext2" << " failed with error code " << hr << '!';
 		return hr;
 	}
 
 	const auto device_context_proxy = new D3D11DeviceContext(this, *ppDeferredContext);
-	device_context_proxy->_buffer_detection.init(*ppDeferredContext, &_immediate_context->_buffer_detection);
+	device_context_proxy->_state.init(*ppDeferredContext, &_immediate_context->_state);
 
 	*ppDeferredContext = device_context_proxy;
 
@@ -507,17 +544,35 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateTexture2D1(const D3D11_TEXTURE2D_DE
 
 	D3D11_TEXTURE2D_DESC1 new_desc = *pDesc1;
 	if (new_desc.SampleDesc.Count == 1 &&
-		0 != (new_desc.BindFlags & D3D11_BIND_DEPTH_STENCIL))
+		0 != (new_desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) &&
+		0 == (new_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE))
 	{
 		new_desc.Format = make_dxgi_format_typeless(new_desc.Format);
 		new_desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
 	}
 
 	assert(_interface_version >= 3);
-	const HRESULT hr = static_cast<ID3D11Device3 *>(_orig)->CreateTexture2D1(pDesc1, pInitialData, ppTexture2D);
+	const HRESULT hr = static_cast<ID3D11Device3 *>(_orig)->CreateTexture2D1(&new_desc, pInitialData, ppTexture2D);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D11Device3::CreateTexture2D1 failed with error code " << hr << '.';
+		LOG(WARN) << "ID3D11Device3::CreateTexture2D1" << " failed with error code " << hr << '.';
+#if RESHADE_VERBOSE_LOG
+		LOG(DEBUG) << "> Dumping description:";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+		LOG(DEBUG) << "  | Width                                   | " << std::setw(39) << new_desc.Width << " |";
+		LOG(DEBUG) << "  | Height                                  | " << std::setw(39) << new_desc.Height << " |";
+		LOG(DEBUG) << "  | MipLevels                               | " << std::setw(39) << new_desc.MipLevels << " |";
+		LOG(DEBUG) << "  | ArraySize                               | " << std::setw(39) << new_desc.ArraySize << " |";
+		LOG(DEBUG) << "  | Format                                  | " << std::setw(39) << new_desc.Format << " |";
+		LOG(DEBUG) << "  | SampleCount                             | " << std::setw(39) << new_desc.SampleDesc.Count << " |";
+		LOG(DEBUG) << "  | SampleQuality                           | " << std::setw(39) << new_desc.SampleDesc.Quality << " |";
+		LOG(DEBUG) << "  | Usage                                   | " << std::setw(39) << new_desc.Usage << " |";
+		LOG(DEBUG) << "  | BindFlags                               | " << std::setw(39) << std::hex << new_desc.BindFlags << std::dec << " |";
+		LOG(DEBUG) << "  | CPUAccessFlags                          | " << std::setw(39) << std::hex << new_desc.CPUAccessFlags << std::dec << " |";
+		LOG(DEBUG) << "  | MiscFlags                               | " << std::setw(39) << std::hex << new_desc.MiscFlags << std::dec << " |";
+		LOG(DEBUG) << "  | TextureLayout                           | " << std::setw(39) << new_desc.TextureLayout << " |";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+#endif
 	}
 
 	return hr;
@@ -534,8 +589,11 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateRasterizerState2(const D3D11_RASTER
 }
 HRESULT STDMETHODCALLTYPE D3D11Device::CreateShaderResourceView1(ID3D11Resource *pResource, const D3D11_SHADER_RESOURCE_VIEW_DESC1 *pDesc1, ID3D11ShaderResourceView1 **ppSRView1)
 {
+	if (pResource == nullptr)
+		return E_INVALIDARG;
+
 	D3D11_SHADER_RESOURCE_VIEW_DESC1 new_desc =
-		pDesc1 != nullptr ? *pDesc1 : D3D11_SHADER_RESOURCE_VIEW_DESC1 {};
+		pDesc1 != nullptr ? *pDesc1 : D3D11_SHADER_RESOURCE_VIEW_DESC1 { DXGI_FORMAT_UNKNOWN };
 
 	if (pDesc1 == nullptr || pDesc1->Format == DXGI_FORMAT_UNKNOWN)
 	{
@@ -579,7 +637,14 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateShaderResourceView1(ID3D11Resource 
 	const HRESULT hr = static_cast<ID3D11Device3 *>(_orig)->CreateShaderResourceView1(pResource, pDesc1, ppSRView1);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D11Device3::CreateShaderResourceView1 failed with error code " << hr << '.';
+		LOG(WARN) << "ID3D11Device3::CreateShaderResourceView1" << " failed with error code " << hr << '.';
+#if RESHADE_VERBOSE_LOG
+		LOG(DEBUG) << "> Dumping description:";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+		LOG(DEBUG) << "  | Format                                  | " << std::setw(39) << new_desc.Format << " |";
+		LOG(DEBUG) << "  | ViewDimension                           | " << std::setw(39) << new_desc.ViewDimension << " |";
+		LOG(DEBUG) << "  +-----------------------------------------+-----------------------------------------+";
+#endif
 	}
 
 	return hr;
@@ -606,7 +671,7 @@ void    STDMETHODCALLTYPE D3D11Device::GetImmediateContext3(ID3D11DeviceContext3
 }
 HRESULT STDMETHODCALLTYPE D3D11Device::CreateDeferredContext3(UINT ContextFlags, ID3D11DeviceContext3 **ppDeferredContext)
 {
-	LOG(INFO) << "Redirecting ID3D11Device3::CreateDeferredContext3" << '(' << "this = " << this << ", ContextFlags = " << ContextFlags << ", ppDeferredContext = " << ppDeferredContext << ')' << " ...";
+	LOG(INFO) << "Redirecting " << "ID3D11Device3::CreateDeferredContext3" << '(' << "this = " << this << ", ContextFlags = " << ContextFlags << ", ppDeferredContext = " << ppDeferredContext << ')' << " ...";
 
 	if (ppDeferredContext == nullptr)
 		return E_INVALIDARG;
@@ -616,12 +681,12 @@ HRESULT STDMETHODCALLTYPE D3D11Device::CreateDeferredContext3(UINT ContextFlags,
 	const HRESULT hr = static_cast<ID3D11Device3 *>(_orig)->CreateDeferredContext3(ContextFlags, ppDeferredContext);
 	if (FAILED(hr))
 	{
-		LOG(WARN) << "ID3D11Device1::CreateDeferredContext3 failed with error code " << hr << '!';
+		LOG(WARN) << "ID3D11Device1::CreateDeferredContext3" << " failed with error code " << hr << '!';
 		return hr;
 	}
 
 	const auto device_context_proxy = new D3D11DeviceContext(this, *ppDeferredContext);
-	device_context_proxy->_buffer_detection.init(*ppDeferredContext, &_immediate_context->_buffer_detection);
+	device_context_proxy->_state.init(*ppDeferredContext, &_immediate_context->_state);
 
 	*ppDeferredContext = device_context_proxy;
 

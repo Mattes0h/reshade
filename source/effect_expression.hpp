@@ -18,12 +18,16 @@ namespace reshadefx
 		{
 			t_void,
 			t_bool,
+			t_min16int,
 			t_int,
+			t_min16uint,
 			t_uint,
+			t_min16float,
 			t_float,
 			t_string,
 			t_struct,
 			t_sampler,
+			t_storage,
 			t_texture,
 			t_function,
 		};
@@ -34,6 +38,7 @@ namespace reshadefx
 			q_uniform = 1 << 2,
 			q_volatile = 1 << 3,
 			q_precise = 1 << 4,
+			q_groupshared = 1 << 14,
 			q_in = 1 << 5,
 			q_out = 1 << 6,
 			q_inout = q_in | q_out,
@@ -64,17 +69,19 @@ namespace reshadefx
 		bool is_scalar() const { return !is_array() && !is_matrix() && !is_vector() && is_numeric(); }
 		bool is_vector() const { return rows > 1 && cols == 1; }
 		bool is_matrix() const { return rows >= 1 && cols > 1; }
-		bool is_signed() const { return base == t_int || base == t_float; }
-		bool is_numeric() const { return is_integral() || is_floating_point(); }
+		bool is_signed() const { return base == t_min16int || base == t_int || base == t_min16float || base == t_float; }
+		bool is_numeric() const { return base >= t_bool && base <= t_float; }
 		bool is_void() const { return base == t_void; }
 		bool is_boolean() const { return base == t_bool; }
-		bool is_integral() const { return base == t_bool || base == t_int || base == t_uint; }
-		bool is_floating_point() const { return base == t_float; }
+		bool is_integral() const { return base >= t_bool && base <= t_uint; }
+		bool is_floating_point() const { return base == t_min16float || base == t_float; }
 		bool is_struct() const { return base == t_struct; }
 		bool is_texture() const { return base == t_texture; }
 		bool is_sampler() const { return base == t_sampler; }
+		bool is_storage() const { return base == t_storage; }
 		bool is_function() const { return base == t_function; }
 
+		unsigned int precision() const { return base == t_min16int || base == t_min16uint || base == t_min16float ? 16 : 32; }
 		unsigned int components() const { return rows * cols; }
 
 		friend inline bool operator==(const type &lhs, const type &rhs)

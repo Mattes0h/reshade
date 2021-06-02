@@ -56,6 +56,13 @@ namespace reshadefx
 		/// <returns>New SSA ID of the binding.</returns>
 		virtual id define_sampler(const location &loc, sampler_info &info) = 0;
 		/// <summary>
+		/// Define a new storage binding.
+		/// </summary>
+		/// <param name="loc">Source location matching this definition (for debugging).</param>
+		/// <param name="info">The storage description.</param>
+		/// <returns>New SSA ID of the binding.</returns>
+		virtual id define_storage(const location &loc, storage_info &info) = 0;
+		/// <summary>
 		/// Define a new uniform variable.
 		/// </summary>
 		/// <param name="loc">Source location matching this definition (for debugging).</param>
@@ -89,9 +96,10 @@ namespace reshadefx
 		/// <summary>
 		/// Make a function a shader entry point.
 		/// </summary>
-		/// <param name="function">The function to use as entry point.</param>
-		/// <param name="is_ps"><c>true</c> if this is a pixel shader, <c>false</c> if it is a vertex shader.</param>
-		virtual void define_entry_point(const function_info &function, bool is_ps) = 0;
+		/// <param name="function">The function to use as entry point. May be overwritten to point to a new unique function for this entry point.</param>
+		/// <param name="type">The shader type (vertex, pixel or compute shader).</param>
+		/// <param name="num_threads">The number of local threads it this is a compute entry point.</param>
+		virtual void define_entry_point(function_info &function, shader_type type, int num_threads[3] = nullptr) = 0;
 
 		/// <summary>
 		/// Resolve the access chain and add a load operation to the output.
@@ -106,6 +114,13 @@ namespace reshadefx
 		/// <param name="chain">The access chain pointing to the variable to store to.</param>
 		/// <param name="value">The SSA ID of the value to store.</param>
 		virtual void emit_store(const expression &chain, id value) = 0;
+		/// <summary>
+		/// Resolve the access chain, but do not add a load operation. This returns a pointer instead.
+		/// </summary>
+		/// <param name="chain">The access chain pointing to the variable to resolve.</param>
+		/// <param name="chain_index">Output value which is set to the index in the access chain up to which the access chain went.</param>
+		/// <returns>New SSA ID with a pointer to the value.</returns>
+		virtual id emit_access_chain(const expression &chain, size_t &chain_index) { chain_index = chain.chain.size(); return emit_load(chain); }
 
 		/// <summary>
 		/// Create a SSA constant value.
@@ -196,7 +211,7 @@ namespace reshadefx
 		/// </summary>
 		/// <param name="loc">Source location matching this switch (for debugging).</param>
 		/// <param name="flags">0 - default, 1 - flatten, 2 - do not flatten</param>
-		virtual void emit_switch(const location &loc, id selector_value, id selector_block, id default_label, const std::vector<id> &case_literal_and_labels, unsigned int flags) = 0;
+		virtual void emit_switch(const location &loc, id selector_value, id selector_block, id default_label, id default_block, const std::vector<id> &case_literal_and_labels, const std::vector<id> &case_blocks, unsigned int flags) = 0;
 
 		/// <summary>
 		/// Returns true if code is currently added to a basic block.
@@ -280,6 +295,16 @@ namespace reshadefx
 			return *std::find_if(_module.textures.begin(), _module.textures.end(),
 				[id](const auto &it) { return it.id == id; });
 		}
+		sampler_info &find_sampler(id id)
+		{
+			return *std::find_if(_module.samplers.begin(), _module.samplers.end(),
+				[id](const auto &it) { return it.id == id; });
+		}
+		storage_info &find_storage(id id)
+		{
+			return *std::find_if(_module.storages.begin(), _module.storages.end(),
+				[id](const auto &it) { return it.id == id; });
+		}
 		/// <summary>
 		/// Look up an existing function definition.
 		/// </summary>
@@ -294,7 +319,17 @@ namespace reshadefx
 	protected:
 		id make_id() { return _next_id++; }
 
-		module _module;
+		static uint32_t align_up(uint32_t size, uint32_t alignment)
+		{
+			alignment -= 1;
+			return ((size + alignment) & ~alignment);
+		}
+		static uint32_t align_up(uint32_t size, uint32_t alignment, uint32_t elements)
+		{
+			return align_up(size, alignment) * (elements - 1) + size;
+		}
+
+		reshadefx::module _module;
 		std::vector<struct_info> _structs;
 		std::vector<std::unique_ptr<function_info>> _functions;
 		id _next_id = 1;
@@ -307,7 +342,9 @@ namespace reshadefx
 	/// </summary>
 	/// <param name="debug_info">Whether to append debug information like line directives to the generated code.</param>
 	/// <param name="uniforms_to_spec_constants">Whether to convert uniform variables to specialization constants.</param>
-	codegen *create_codegen_glsl(bool debug_info, bool uniforms_to_spec_constants);
+	/// <param name="enable_16bit_types">Use real 16-bit types for the minimum precision types "min16int", "min16uint" and "min16float".</param>
+	/// <param name="flip_vert_y">Insert code to flip the Y component of the output position in vertex shaders.</param>
+	codegen *create_codegen_glsl(bool debug_info, bool uniforms_to_spec_constants, bool enable_16bit_types = false, bool flip_vert_y = false);
 	/// <summary>
 	/// Create a back-end implementation for HLSL code generation.
 	/// </summary>
@@ -321,6 +358,7 @@ namespace reshadefx
 	/// <param name="vulkan_semantics">Generate SPIR-V for OpenGL or for Vulkan.</param>
 	/// <param name="debug_info">Whether to append debug information like line directives to the generated code.</param>
 	/// <param name="uniforms_to_spec_constants">Whether to convert uniform variables to specialization constants.</param>
-	/// <param name="invert_y">Insert code to invert the Y component of the output position in vertex shaders.</param>
-	codegen *create_codegen_spirv(bool vulkan_semantics, bool debug_info, bool uniforms_to_spec_constants, bool invert_y = false);
+	/// <param name="enable_16bit_types">Use real 16-bit types for the minimum precision types "min16int", "min16uint" and "min16float".</param>
+	/// <param name="flip_vert_y">Insert code to flip the Y component of the output position in vertex shaders.</param>
+	codegen *create_codegen_spirv(bool vulkan_semantics, bool debug_info, bool uniforms_to_spec_constants, bool enable_16bit_types = false, bool flip_vert_y = false);
 }

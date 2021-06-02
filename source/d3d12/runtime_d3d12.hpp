@@ -6,30 +6,67 @@
 #pragma once
 
 #include "runtime.hpp"
-#include "buffer_detection.hpp"
+#include "state_tracking.hpp"
 #include <dxgi1_5.h>
 
 namespace reshade::d3d12
 {
+	class crosstalk
+	{
+		static const GUID fake_guid;
+		static const uint64_t magic;
+
+	public:
+		enum ResNames
+		{
+			COLOR = 0,
+			DEPTH = 1,
+			ZPREPASS = 2,
+			GBUF_0 = 3,
+			GBUF_1 = 4,
+			GBUF_2 = 5,
+			GBUF_3 = 6,
+			GBUF_4 = 7,
+			OVERLAY_0 = 8,
+			OVERLAY_1 = 9,
+			OVERLAY_2 = 10,
+			OVERLAY_3 = 11,
+			OPAQUE_GEOMETRY = 12,
+			TRANSP_GEOMETRY = 13,
+			COUNT = 14
+		};
+
+		struct entry
+		{
+			uint64_t magic;
+			uint64_t ct_idx;
+			union {
+				void* ptr;
+				ID3D12Resource* res;
+			};
+		};
+
+		static bool check_call(REFGUID guid, UINT DataSize, const void* pData);
+		static void set_crosstalk_resource(int ct_index, ID3D12Resource* res);
+		static ID3D12Resource* get_crosstalk_resource(ResNames ct_index);
+
+		static void replace_texture(const texture& texture, com_ptr<ID3D12Resource>& resource);
+	};
+
 	class runtime_d3d12 : public runtime
 	{
 		static const uint32_t NUM_IMGUI_BUFFERS = 5;
 
 	public:
-		runtime_d3d12(ID3D12Device *device, ID3D12CommandQueue *queue, IDXGISwapChain3 *swapchain);
+		runtime_d3d12(ID3D12Device *device, ID3D12CommandQueue *queue, IDXGISwapChain3 *swapchain, state_tracking_context *state_tracking);
 		~runtime_d3d12();
 
-		bool on_init(const DXGI_SWAP_CHAIN_DESC &desc
-#if RESHADE_D3D12ON7
-			, ID3D12Resource *backbuffer = nullptr
-#endif
-			);
+		bool on_init(const DXGI_SWAP_CHAIN_DESC &desc);
 		void on_reset();
 		void on_present();
+		void on_present(ID3D12Resource *backbuffer, HWND hwnd);
 
 		bool capture_screenshot(uint8_t *buffer) const override;
-
-		buffer_detection_context *_buffer_detection = nullptr;
 
 	private:
 		bool init_effect(size_t index) override;
@@ -39,7 +76,7 @@ namespace reshade::d3d12
 		bool init_texture(texture &texture) override;
 		void upload_texture(const texture &texture, const uint8_t *pixels) override;
 		void destroy_texture(texture &texture) override;
-		void generate_mipmaps(const texture &texture);
+		void generate_mipmaps(const struct tex_data *impl);
 
 		void render_technique(technique &technique) override;
 
@@ -49,9 +86,10 @@ namespace reshade::d3d12
 
 		com_ptr<ID3D12RootSignature> create_root_signature(const D3D12_ROOT_SIGNATURE_DESC &desc) const;
 
+		state_tracking_context &_state_tracking;
 		const com_ptr<ID3D12Device> _device;
-		const com_ptr<ID3D12CommandQueue> _commandqueue;
 		const com_ptr<IDXGISwapChain3> _swapchain;
+		const com_ptr<ID3D12CommandQueue> _commandqueue;
 		UINT _srv_handle_size = 0;
 		UINT _rtv_handle_size = 0;
 		UINT _dsv_handle_size = 0;
@@ -76,7 +114,7 @@ namespace reshade::d3d12
 
 		HMODULE _d3d_compiler = nullptr;
 		com_ptr<ID3D12Resource> _effect_stencil;
-		std::vector<struct d3d12_effect_data> _effect_data;
+		std::vector<struct effect_data> _effect_data;
 
 #if RESHADE_GUI
 		bool init_imgui_resources();
@@ -95,14 +133,10 @@ namespace reshade::d3d12
 #endif
 
 #if RESHADE_DEPTH
-		void draw_depth_debug_menu(buffer_detection_context &tracker);
+		void draw_depth_debug_menu();
 		void update_depth_texture_bindings(com_ptr<ID3D12Resource> texture);
 
 		com_ptr<ID3D12Resource> _depth_texture;
-
-		bool _filter_aspect_ratio = true;
-		bool _preserve_depth_buffers = false;
-		UINT _depth_clear_index_override = std::numeric_limits<UINT>::max();
 		ID3D12Resource *_depth_texture_override = nullptr;
 #endif
 	};

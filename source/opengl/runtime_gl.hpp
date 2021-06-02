@@ -7,7 +7,7 @@
 
 #include "runtime.hpp"
 #include "state_block.hpp"
-#include "buffer_detection.hpp"
+#include "state_tracking.hpp"
 #include <unordered_set>
 
 namespace reshade::opengl
@@ -23,8 +23,9 @@ namespace reshade::opengl
 
 		bool capture_screenshot(uint8_t *buffer) const override;
 
+		state_tracking _state_tracking;
+		bool _compatibility_context = false;
 		std::unordered_set<HDC> _hdcs;
-		buffer_detection _buffer_detection;
 
 	private:
 		bool init_effect(size_t index) override;
@@ -34,6 +35,7 @@ namespace reshade::opengl
 		bool init_texture(texture &texture) override;
 		void upload_texture(const texture &texture, const uint8_t *data) override;
 		void destroy_texture(texture &texture) override;
+		void generate_mipmaps(const struct tex_data *impl);
 
 		void render_technique(technique &technique) override;
 
@@ -85,6 +87,7 @@ namespace reshade::opengl
 		GLuint _vao[NUM_VAO] = {};
 		GLuint _fbo[NUM_FBO] = {}, _current_fbo = 0;
 		GLuint _rbo[NUM_RBO] = {};
+		GLuint _mipmap_program = 0;
 		GLenum _default_depth_format = GL_NONE;
 		std::vector<GLuint> _effect_ubos;
 		std::vector<GLuint> _reserved_texture_names;
@@ -102,10 +105,9 @@ namespace reshade::opengl
 
 #if RESHADE_DEPTH
 		void draw_depth_debug_menu();
-		void update_depth_texture_bindings(buffer_detection::depthstencil_info info);
+		void update_depth_texture_bindings(state_tracking::depthstencil_info info);
 
 		bool _copy_depth_source = true;
-		bool _use_aspect_ratio_heuristics = true;
 		GLuint _depth_source = 0;
 		GLuint _depth_source_width = 0, _depth_source_height = 0;
 		GLenum _depth_source_format = 0;
